@@ -56,11 +56,28 @@ huc12 %>% write_sf("shp_clean/wi-huc-12.shp")
 
 # Station list -----------------------------------------------------------
 
-stns <- read_csv("stations/cbsm-project-list.csv") %>%
+stns <- read_csv("stations/baseline-locs.csv") %>%
   clean_names() %>%
   select(-starts_with("plan_")) %>%
+  rename(station_name = primary_station_name) %>%
   drop_na(latitude, longitude) %>%
-  distinct(latitude, longitude, .keep_all = T) %>%
+  distinct(latitude, longitude, .keep_all = T)
+
+therm_stns <- read_csv("stations/therm-locs.csv")
+
+# these thermistor stations are already in the baseline stations
+therm_stns %>% filter(station_id %in% stns$station_id)
+
+tp_stns <- read_csv("stations/tp-locs.csv")
+
+# these tp stations are already in the baseline stations
+tp_stns %>% filter(station_id %in% stns$station_id)
+
+
+all_stns <- stns %>%
+  bind_rows(therm_stns) %>%
+  bind_rows(tp_stns) %>%
+  distinct(station_id, .keep_all = T) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
   st_join(select(counties, dnr_region)) %>%
   st_join(select(huc8, huc8_name)) %>%
@@ -68,7 +85,7 @@ stns <- read_csv("stations/cbsm-project-list.csv") %>%
   st_join(select(huc12, huc12_name)) %>%
   select(
     station_id,
-    primary_station_name,
+    station_name,
     wbic,
     official_name,
     county_name,
@@ -82,17 +99,9 @@ stns <- read_csv("stations/cbsm-project-list.csv") %>%
     longitude,
     geometry
     )
-ggplot(stns) + geom_sf()
 
-# read_csv("stations/cbsm-project-list.csv") %>%
-#   clean_names() %>%
-#   drop_na(latitude, longitude) %>%
-#   group_by(latitude, longitude) %>%
-#   summarise(n = n(), stnids = paste(station_id, collapse = ", ")) %>%
-#   arrange(desc(n))
-
-stns %>%
-  mutate(label = paste0("[", station_id, "] ", primary_station_name)) %>%
+all_stns %>%
+  mutate(label = paste0("[", station_id, "] ", station_name)) %>%
   leaflet() %>%
   addTiles() %>%
   addCircleMarkers(
@@ -102,9 +111,9 @@ stns %>%
     label = ~label,
     clusterOptions = markerClusterOptions())
 
-stns %>%
+all_stns %>%
   st_set_geometry(NULL) %>%
-  write_csv("baseline_clean/station-list.csv")
+  write_csv("stations_clean/station-list.csv")
 
 
 
@@ -141,3 +150,35 @@ baseline_joined <- baseline_data %>%
 
 baseline_joined %>% write_csv("baseline_clean/baseline-data.csv")
 
+
+
+
+
+# Nutrient data -----------------------------------------------------------
+
+tp_data <- read_csv("nutrient/tp-data-2021.csv") %>%
+  mutate(num_obs = rowSums(!is.na(select(., May:October)))) %>%
+  filter(num_obs > 0) %>%
+  pivot_longer(
+    cols = May:October,
+    names_to = "month_name",
+    values_to = "tp") %>%
+  mutate(month = match(month_name, month.name), .before = "month_name") %>%
+  mutate(date = as.Date(paste(year, month, 15, sep = "-")), .after = "month_name")
+
+tp_sites <- read_csv("nutrient/tp-sites-2021.csv")
+
+# if anything show up it needs to be added to the station list
+tp_sites %>% filter(!(station_id %in% all_stns$station_id))
+
+tp_joined <- tp_data %>%
+  left_join(tp_sites[c("station_id", "station_name", "latitude", "longitude")])
+
+tp_joined %>% write_csv("nutrient_clean/tp-data.csv")
+
+
+
+
+# Thermistor data ---------------------------------------------------------
+
+# for now this is its own project under /Thermistor Data
