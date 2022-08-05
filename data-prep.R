@@ -70,10 +70,14 @@ tp_stns <- read_csv("stations/tp-locs.csv")
 # these tp stations are already in the baseline stations
 tp_stns %>% filter(station_id %in% stns$station_id)
 
+# additional stations, if missing from the other sources
+extra_stns <- read_csv("stations/additional-locs.csv")
+
 
 all_stns <- stns %>%
   bind_rows(therm_stns) %>%
   bind_rows(tp_stns) %>%
+  bind_rows(extra_stns) %>%
   distinct(station_id, .keep_all = T) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
   st_join(select(counties, dnr_region = DnrRegion)) %>%
@@ -137,7 +141,8 @@ flow_data <- c(
     stream_width,
     average_stream_depth,
     average_surface_velocity,
-    corrected_streamflow) %>%
+    calculated_stream_flow,
+    corrected_stream_flow = corrected_streamflow) %>%
   mutate(start_date = parse_date(start_date, "%m/%d/%Y")) %>%
   distinct(station_id, start_date, .keep_all = T) %>%
   mutate(station_id = as.numeric(station_id))
@@ -154,10 +159,31 @@ baseline_joined <- baseline_data %>%
     day = day(date),
     yday = yday(date),
     .after = date
-  )
+  ) %>%
+  select(
+    -c(
+      "secondary_station_type",
+      "dyn_form_code",
+      "transparency_trial_1",
+      "transparency_trial_2",
+      "chloride_sample_collected",
+      "point_outfall_number_chloride",
+      "tp_sample_collected",
+      "point_outfall_number_tp"
+    )
+  ) %>%
+  mutate(d_o_units = "mg/L", .after = d_o) %>%
+  mutate(transparency_units = "cm", .after = transparency_average) %>%
+  mutate(stream_width_units = "ft", .after = stream_width) %>%
+  mutate(stream_depth_units = "ft", .after = average_stream_depth) %>%
+  mutate(surface_velocity_units = "ft/s", .after = average_surface_velocity) %>%
+  mutate(stream_flow_units = "cfs", .after = corrected_stream_flow) %>%
+  relocate(contains("_comment"), .after = everything()) %>%
+  rename(stream_flow_comments = additional_comments)
+
+names(baseline_joined)
 
 baseline_joined %>% write_csv("baseline_clean/baseline-data.csv")
-
 
 
 
@@ -190,3 +216,16 @@ tp_joined %>% write_csv("nutrient_clean/tp-data.csv")
 # Thermistor data ---------------------------------------------------------
 
 # for now this is its own project under /Thermistor Data
+
+
+
+# Station crossref --------------------------------------------------------
+
+# baseline stations not in station lists
+missing_baseline <- baseline_joined %>%
+  count(station_id, station_name, name = "baseline_obs") %>%
+  filter(!(station_id %in% all_stns$station_id))
+missing_baseline %>%
+  mutate(wbic = "", official_name = "", latitude = "", longitude = "") %>%
+  write_csv("stations/missing-baseline-stations.csv")
+
