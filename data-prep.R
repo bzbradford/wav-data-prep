@@ -53,34 +53,46 @@ huc12 %>% write_sf("shp_clean/wi-huc-12.shp")
 
 # Station list -----------------------------------------------------------
 
-stns <- read_csv("stations/baseline-locs.csv") %>%
+## CBSM station list ----
+
+stns <- read_csv("stations/cbsm-locs.csv") %>%
   clean_names() %>%
-  select(-starts_with("plan_")) %>%
-  rename(station_name = primary_station_name) %>%
   drop_na(latitude, longitude) %>%
   distinct(latitude, longitude, .keep_all = T)
 
-therm_stns <- read_csv("stations/therm-locs.csv")
+# additional stations, if missing from the cbsm list
+extra_stns <- read_csv("stations/additional-locs.csv")
 
-# these thermistor stations are already in the baseline stations
-therm_stns %>% filter(station_id %in% stns$station_id)
+# already in the baseline stations
+extra_stns %>% filter(station_id %in% stns$station_id)
+
+
+## TP stations ----
 
 tp_stns <- read_csv("stations/tp-locs.csv")
 
-# these tp stations are already in the baseline stations
+# already in the baseline stations
 tp_stns %>% filter(station_id %in% stns$station_id)
 
-# additional stations, if missing from the other sources
-extra_stns <- read_csv("stations/additional-locs.csv")
+
+## Thermistor stations ----
+
+therm_stns <- read_csv("stations/therm-locs.csv")
+
+# already in the baseline stations
+therm_stns %>% filter(station_id %in% stns$station_id)
 
 
-all_stns <- stns %>%
-  bind_rows(therm_stns) %>%
-  bind_rows(tp_stns) %>%
+
+
+
+all_stns.sf <- stns %>%
   bind_rows(extra_stns) %>%
+  bind_rows(tp_stns) %>%
+  bind_rows(therm_stns) %>%
   distinct(station_id, .keep_all = T) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
-  st_join(select(counties, dnr_region = DnrRegion)) %>%
+  st_join(select(counties, DnrRegion:CountyFip)) %>%
   st_join(select(huc8, huc8_name = Huc8Name)) %>%
   st_join(select(huc10, huc10_name = Huc10Name)) %>%
   st_join(select(huc12, huc12_name = Huc12Name)) %>%
@@ -88,20 +100,21 @@ all_stns <- stns %>%
     station_id,
     station_name,
     wbic,
-    official_name,
-    county_name,
-    dnr_region,
+    waterbody,
+    county_name = CountyNam,
+    county_code = DnrCntyC,
+    county_fip = CountyFip,
+    dnr_region = DnrRegion,
     huc8_name,
     huc10_name,
     huc12_name,
-    max_fw_year,
-    max_fw_date,
     latitude,
     longitude,
     geometry
-  )
+  ) %>%
+  arrange(station_id)
 
-all_stns %>%
+all_stns.sf %>%
   mutate(label = paste0("[", station_id, "] ", station_name)) %>%
   leaflet() %>%
   addTiles() %>%
@@ -112,9 +125,8 @@ all_stns %>%
     label = ~label,
     clusterOptions = markerClusterOptions())
 
-all_stns %>%
-  st_set_geometry(NULL) %>%
-  write_csv("stations_clean/station-list.csv")
+all_stns <- all_stns.sf %>% st_set_geometry(NULL)
+all_stns %>% write_csv("stations_clean/station-list.csv")
 
 
 
@@ -190,7 +202,13 @@ baseline_joined %>% write_csv("baseline_clean/baseline-data.csv")
 
 # Nutrient data -----------------------------------------------------------
 
-tp_data <- read_csv("nutrient/tp-data-2021.csv") %>%
+
+
+tp_data <- bind_rows(
+  read_csv("nutrient/tp-data-2019.csv"),
+  read_csv("nutrient/tp-data-2020.csv"),
+  read_csv("nutrient/tp-data-2021.csv")
+  ) %>%
   mutate(num_obs = rowSums(!is.na(select(., May:October)))) %>%
   filter(num_obs > 0) %>%
   pivot_longer(
@@ -200,13 +218,18 @@ tp_data <- read_csv("nutrient/tp-data-2021.csv") %>%
   mutate(month = match(month_name, month.name), .before = "month_name") %>%
   mutate(date = as.Date(paste(year, month, 15, sep = "-")), .after = "month_name")
 
-tp_sites <- read_csv("nutrient/tp-sites-2021.csv")
-
 # if anything show up it needs to be added to the station list
-tp_sites %>% filter(!(station_id %in% all_stns$station_id))
+tp_data %>%
+  count(station_id, station_name) %>%
+  filter(!(station_id %in% all_stns$station_id)) %>%
+  mutate(latitude = "", longitude = "", wbic = "", waterbody_name = "")
+
+# %>%
+#   write_csv("nutrient/missing-nutrient-sites.csv")
 
 tp_joined <- tp_data %>%
-  left_join(tp_sites[c("station_id", "station_name", "latitude", "longitude")])
+  select(-station_name) %>%
+  left_join(all_stns)
 
 tp_joined %>% write_csv("nutrient_clean/tp-data.csv")
 
