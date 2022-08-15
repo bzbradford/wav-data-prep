@@ -92,7 +92,7 @@ all_stns.sf <- stns %>%
   bind_rows(therm_stns) %>%
   distinct(station_id, .keep_all = T) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
-  st_join(select(counties, DnrRegion:CountyFip)) %>%
+  st_join(select(counties, DnrRegion, CountyNam)) %>%
   st_join(select(huc8, huc8_name = Huc8Name)) %>%
   st_join(select(huc10, huc10_name = Huc10Name)) %>%
   st_join(select(huc12, huc12_name = Huc12Name)) %>%
@@ -102,8 +102,6 @@ all_stns.sf <- stns %>%
     wbic,
     waterbody,
     county_name = CountyNam,
-    county_code = DnrCntyC,
-    county_fip = CountyFip,
     dnr_region = DnrRegion,
     huc8_name,
     huc10_name,
