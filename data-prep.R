@@ -189,7 +189,8 @@ baseline_joined <- baseline_data %>%
   mutate(surface_velocity_units = "ft/s", .after = average_surface_velocity) %>%
   mutate(stream_flow_units = "cfs", .after = corrected_stream_flow) %>%
   relocate(contains("_comment"), .after = everything()) %>%
-  rename(stream_flow_comments = additional_comments)
+  rename(stream_flow_comments = additional_comments) %>%
+  type_convert()
 
 names(baseline_joined)
 
