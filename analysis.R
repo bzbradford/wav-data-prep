@@ -272,4 +272,3 @@ volunteer_fieldwork_counts %>%
   pivot_wider(names_from = year, values_from = n, values_fill = 0) %>%
   write_csv("baseline volunteer counts.csv")
 
-

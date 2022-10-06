@@ -9,7 +9,11 @@ library(lubridate)
 
 
 
+
 # Shapefiles --------------------------------------------------------------
+
+library(rmapshaper)
+library(mapview)
 
 counties <- read_sf("shp/wi-counties.shp") %>%
   clean_names(case = "big_camel") %>%
@@ -17,36 +21,50 @@ counties <- read_sf("shp/wi-counties.shp") %>%
     ShapeLen = Shapelen,
     ShapeArea = Shapearea
   )
+npts(counties)
 ggplot(counties) + geom_sf()
-counties %>% write_sf("shp_clean/wi-counties.shp")
+counties %>%
+  ms_simplify(0.5) %>%
+  write_sf("shp_clean/wi-counties.shp")
 
 nkes <- read_sf("shp/nke-plans-2022.shp") %>%
   clean_names(case = "big_camel") %>%
   select(-"ShapeLe1") %>%
   rename(ShapeLen = ShapeLeng)
+npts(nkes)
 ggplot(nkes) + geom_sf()
-nkes %>% write_sf("shp_clean/nke-plans-2022.shp")
-
+nkes %>%
+  ms_simplify(0.5) %>%
+  write_sf("shp_clean/nke-plans-2022.shp")
 
 huc8 <- read_sf("shp/wi-huc-8.shp") %>%
   clean_names(case = "big_camel") %>%
   rename(ShapeArea = ShapeAre)
+npts(huc8)
 ggplot(huc8) + geom_sf()
-huc8 %>% write_sf("shp_clean/wi-huc-8.shp")
+huc8 %>%
+  ms_simplify(0.5) %>%
+  write_sf("shp_clean/wi-huc-8.shp")
 
 
 huc10 <- read_sf("shp/wi-huc-10.shp") %>%
   clean_names(case = "big_camel") %>%
   rename(ShapeArea = ShapeAre)
+npts(huc10)
 ggplot(huc10) + geom_sf()
-huc10 %>% write_sf("shp_clean/wi-huc-10.shp")
+huc10 %>%
+  ms_simplify(0.5) %>%
+  write_sf("shp_clean/wi-huc-10.shp")
 
 
 huc12 <- read_sf("shp/wi-huc-12.shp") %>%
   clean_names(case = "big_camel") %>%
   rename(ShapeArea = ShapeAre)
+npts(huc12)
 ggplot(huc12) + geom_sf()
-huc12 %>% write_sf("shp_clean/wi-huc-12.shp")
+huc12 %>%
+  ms_simplify(0.5) %>%
+  write_sf("shp_clean/wi-huc-12.shp")
 
 
 
