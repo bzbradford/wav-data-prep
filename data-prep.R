@@ -5,15 +5,11 @@ library(sf)
 library(janitor)
 library(leaflet)
 library(lubridate)
-
-
-
+library(rmapshaper)
+library(mapview)
 
 
 # Shapefiles --------------------------------------------------------------
-
-library(rmapshaper)
-library(mapview)
 
 counties <- read_sf("shp/wi-counties.shp") %>%
   clean_names(case = "big_camel") %>%
@@ -68,47 +64,207 @@ huc12 %>%
 
 
 
+# Station lists -----------------------------------------------------------
 
-# Station list -----------------------------------------------------------
-
-## CBSM station list ----
-
-stns <- read_csv("stations/cbsm-locs.csv") %>%
+stn_wbics <- read_csv("stations/swims-all-stations-bad-lat-lon.csv", col_types = list(.default = "c", STATION_ID = "d")) %>%
   clean_names() %>%
-  drop_na(latitude, longitude) %>%
-  distinct(latitude, longitude, .keep_all = T)
+  select(station_id, wbic, waterbody)
 
-# additional stations, if missing from the cbsm list
-extra_stns <- read_csv("stations/additional-locs.csv")
+# is missing wbic and waterbody name. List of all stations as a backup
+stn_list <- read_csv("stations/swims-all-stations.csv", col_types = list(.default = "c", STATION_ID = "d")) %>%
+  clean_names() %>%
+  mutate(station_name = str_replace_all(station_name, "[^[:print:]]", "")) %>%
+  arrange(station_id) %>%
+  left_join(stn_wbics)
 
-# already in the baseline stations
-extra_stns %>% filter(station_id %in% stns$station_id)
+# # has wbic and waterbody name
+# cbsm_stns <- read_csv("stations/cbsm-locs.csv", col_types = cols(.default = "c")) %>%
+#   clean_names() %>%
+#   drop_na(latitude, longitude) %>%
+#   distinct(latitude, longitude, .keep_all = T)
+
+# tp_stns <- read_csv("stations/tp-locs.csv", col_types = cols(.default = "c"))
+#
+# therm_stns <- read_csv("stations/therm-locs.csv", col_types = cols(.default = "c"))
+#
+# # additional stations, if missing from the cbsm list
+# extra_stns <- read_csv("stations/additional-locs.csv", col_types = cols(.default = "c"))
 
 
-## TP stations ----
 
-tp_stns <- read_csv("stations/tp-locs.csv")
+# bind in order of best to worst data
+# stn_list <- bind_rows(cbsm_stns, tp_stns, therm_stns, extra_stns, swims_stns) %>%
+#   distinct(station_id, .keep_all = T) %>%
+#   arrange(station_id)
 
-# already in the baseline stations
-tp_stns %>% filter(station_id %in% stns$station_id)
 
 
-## Thermistor stations ----
+# Baseline data -----------------------------------------------------------
+
+baseline_obs <- list(
+  "baseline/Baseline Data 2019-2021.csv",
+  "baseline/Baseline Data 2022.csv") %>%
+  lapply(read_csv, col_types = list(.default = "c", STATION_ID = "d")) %>%
+  bind_rows() %>%
+  clean_names() %>%
+  select(
+    station_id,
+    # station_name = primary_station_name,
+    # station_type_code,
+    # secondary_station_type,
+    # fieldwork_seq_no,
+    group_desc,
+    date = start_date,
+    # sample_header_seq_no,
+    # dyn_form_code,
+    weather_conditions,
+    # sampling_date,
+    weather_over_past_2_days,
+    current_stream_condition,
+    ambient_air_temp_field,
+    ambient_air_temp_units,
+    water_temperature,
+    water_temperature_units,
+    d_o_sampling_method,
+    d_o,
+    d_o_percent_saturation,
+    p_h,
+    transparency_tube_length,
+    # transparency_trial_1,
+    # transparency_trial_2,
+    transparency_average,
+    specific_conductance,
+    # chloride_sample_collected,
+    # point_outfall_number_chloride,
+    # tp_sample_collected,
+    # point_outfall_number_tp,
+    additional_comments,
+    fieldwork_comment) %>%
+  distinct(station_id, date, .keep_all = T)
+
+add_units <- function(.data, col, units) {
+  mutate(.data, "{col}_units" := case_when(is.na(.data[[col]]) ~ "", T ~ units), .after = {{col}})
+}
+
+# Stream flow data
+flow_obs <- list(
+  "baseline/Flow Data 2019.csv",
+  "baseline/Flow Data 2020.csv",
+  "baseline/Flow Data 2021.csv",
+  "baseline/Flow Data 2022.csv") %>%
+  lapply(read_csv, col_types = list(.default = "c", STATION_ID = "d")) %>%
+  bind_rows() %>%
+  clean_names() %>%
+  mutate(stream_flow_cfs = case_when(
+    !is.na(stream_flow_cfs) ~ stream_flow_cfs,
+    T ~ corrected_streamflow
+  )) %>%
+  select(
+    station_id,
+    date = start_date,
+    stream_width,
+    average_stream_depth,
+    average_surface_velocity,
+    stream_flow_cfs,
+    flow_method_used) %>%
+  replace_na(list(flow_method_used = "Not Specified")) %>%
+  distinct(station_id, date, .keep_all = T)
+
+baseline_data <- baseline_obs %>%
+  left_join(flow_obs) %>%
+  mutate(
+    date = parse_date(date, "%m/%d/%Y"),
+    year = year(date),
+    month = month(date),
+    day = day(date),
+    yday = yday(date),
+    .after = date
+  ) %>%
+  add_units("d_o", "mg/L") %>%
+  add_units("transparency_average", "cm") %>%
+  add_units("stream_width", "ft") %>%
+  add_units("average_stream_depth", "ft") %>%
+  add_units("average_surface_velocity", "ft/s") %>%
+  relocate(contains("_comment"), .after = everything()) %>%
+  rename(stream_flow_comments = additional_comments) %>%
+  type_convert() %>%
+  arrange(year, station_id, date)
+
+# Nutrient data -----------------------------------------------------------
+
+tp_data <- list(
+  "nutrient/tp-data-2019.csv",
+  "nutrient/tp-data-2020.csv",
+  "nutrient/tp-data-2021.csv"
+) %>%
+  lapply(read_csv, col_types = cols(.default = "c", station_id = "d")) %>%
+  bind_rows() %>%
+  select(-"station_name") %>%
+  mutate(num_obs = rowSums(!is.na(select(., May:October)))) %>%
+  filter(num_obs > 0) %>%
+  pivot_longer(
+    cols = May:October,
+    names_to = "month_name",
+    values_to = "tp") %>%
+  mutate(month = match(month_name, month.name), .before = "month_name") %>%
+  mutate(date = as.Date(paste(year, month, 15, sep = "-")), .after = "month_name") %>%
+  arrange(year, station_id, date)
+
+
+
+# Thermistor data ---------------------------------------------------------
+
+# for now this is its own project under /Thermistor Data
 
 therm_stns <- read_csv("stations/therm-locs.csv")
 
-# already in the baseline stations
-therm_stns %>% filter(station_id %in% stns$station_id)
+
+
+# Trim station list -------------------------------------------------------
+
+## Check baseline ----
+
+# number of baseline stations
+baseline_data %>% count(station_id)
+
+# any baseline stations missing from list?
+baseline_data %>%
+  count(station_id) %>%
+  filter(!(station_id %in% stn_list$station_id))
+
+
+## Check nutrient ----
+
+# number of nutrient stations
+tp_data %>% count(station_id)
+
+# any nutrient stations missing?
+tp_data %>%
+  count(station_id) %>%
+  filter(!(station_id %in% stn_list$station_id))
+
+
+## Check thermistor ----
+
+therm_stns %>% count(station_id)
+
+therm_stns %>%
+  count(station_id) %>%
+  filter(!(station_id %in% stn_list$station_id))
 
 
 
+## Stations to keep ----
 
+keep_stns <- unique(c(
+  baseline_data$station_id,
+  tp_data$station_id,
+  therm_stns$station_id
+))
 
-all_stns.sf <- stns %>%
-  bind_rows(extra_stns) %>%
-  bind_rows(tp_stns) %>%
-  bind_rows(therm_stns) %>%
-  distinct(station_id, .keep_all = T) %>%
+# create sf
+all_stns.sf <- stn_list %>%
+  filter(station_id %in% keep_stns) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
   st_join(select(counties, DnrRegion, CountyNam)) %>%
   st_join(select(huc8, huc8_name = Huc8Name)) %>%
@@ -130,6 +286,7 @@ all_stns.sf <- stns %>%
   ) %>%
   arrange(station_id)
 
+# Plot stations
 all_stns.sf %>%
   mutate(label = paste0("[", station_id, "] ", station_name)) %>%
   leaflet() %>%
@@ -141,131 +298,74 @@ all_stns.sf %>%
     label = ~label,
     clusterOptions = markerClusterOptions())
 
-all_stns <- all_stns.sf %>% st_set_geometry(NULL)
+all_stns <- all_stns.sf %>%
+  st_set_geometry(NULL)
+
+baseline_stns <- all_stns %>%
+  filter(station_id %in% baseline_data$station_id)
+
+tp_stns <- all_stns %>%
+  filter(station_id %in% tp_data$station_id)
+
+
+# Export data -------------------------------------------------------------
+
+baseline_final <- baseline_data %>%
+  left_join(all_stns) %>%
+  relocate(station_name, .after = station_id) %>%
+  arrange(station_id, date)
+
+baseline_final %>% write_csv("baseline_clean/baseline-data.csv")
+# baseline_final %>% write_csv("../Dashboard/data/baseline-data.csv")
+
+tp_final <- tp_data %>%
+  left_join(all_stns) %>%
+  relocate(station_name, .after = station_id) %>%
+  arrange(station_id, date)
+
+tp_final %>% write_csv("nutrient_clean/tp-data.csv")
+# tp_final %>% write_csv("../Dashboard/data/tp-data.csv")
+
 all_stns %>% write_csv("stations_clean/station-list.csv")
-
-
-
-# Baseline data -----------------------------------------------------------
-
-baseline_data <- read_csv("baseline/Baseline Data 2019-2021.csv") %>%
-  clean_names() %>%
-  select(-starts_with("plan_")) %>%
-  mutate(start_date = parse_date(start_date, "%m/%d/%Y"))
-
-
-# Stream flow data
-flow_data <- c(
-  "baseline/Flow Data 2019.csv",
-  "baseline/Flow Data 2020.csv",
-  "baseline/Flow Data 2021.csv") %>%
-  lapply(read_csv, col_types = cols(.default = "c")) %>%
-  bind_rows() %>%
-  clean_names() %>%
-  select(
-    station_id,
-    primary_station_name,
-    start_date,
-    stream_width,
-    average_stream_depth,
-    average_surface_velocity,
-    calculated_stream_flow,
-    corrected_stream_flow = corrected_streamflow) %>%
-  mutate(start_date = parse_date(start_date, "%m/%d/%Y")) %>%
-  distinct(station_id, start_date, .keep_all = T) %>%
-  mutate(station_id = as.numeric(station_id))
-
-baseline_joined <- baseline_data %>%
-  left_join(flow_data) %>%
-  rename(
-    date = start_date,
-    station_name = primary_station_name) %>%
-  mutate(station_id = as.numeric(station_id)) %>%
-  mutate(
-    year = year(date),
-    month = month(date),
-    day = day(date),
-    yday = yday(date),
-    .after = date
-  ) %>%
-  select(
-    -c(
-      "secondary_station_type",
-      "dyn_form_code",
-      "transparency_trial_1",
-      "transparency_trial_2",
-      "chloride_sample_collected",
-      "point_outfall_number_chloride",
-      "tp_sample_collected",
-      "point_outfall_number_tp"
-    )
-  ) %>%
-  mutate(d_o_units = "mg/L", .after = d_o) %>%
-  mutate(transparency_units = "cm", .after = transparency_average) %>%
-  mutate(stream_width_units = "ft", .after = stream_width) %>%
-  mutate(stream_depth_units = "ft", .after = average_stream_depth) %>%
-  mutate(surface_velocity_units = "ft/s", .after = average_surface_velocity) %>%
-  mutate(stream_flow_units = "cfs", .after = corrected_stream_flow) %>%
-  relocate(contains("_comment"), .after = everything()) %>%
-  rename(stream_flow_comments = additional_comments) %>%
-  type_convert()
-
-names(baseline_joined)
-
-baseline_joined %>% write_csv("baseline_clean/baseline-data.csv")
+# all_stns %>% write_csv("../Dashboard/data/station-list.csv")
 
 
 
 
-# Nutrient data -----------------------------------------------------------
+
+# Misc --------------------------------------------------------------------
+
+all_stns %>%
+  filter(station_id == 223252)
+
+all_stns %>%
+  group_by(latitude, longitude) %>%
+  filter(n() > 1) %>%
+  arrange(latitude, longitude)
+
+baseline_stn_dupes <- baseline_stns %>%
+  group_by(latitude, longitude) %>%
+  filter(n() > 1) %>%
+  arrange(latitude, longitude) %>%
+  select(station_id, station_name, latitude, longitude, everything())
+
+baseline_stn_dupes %>% write_csv("baseline station duplicates.csv")
+
+baseline_final %>%
+  filter(station_id %in% baseline_stn_dupes$station_id) %>%
+  arrange(latitude, longitude) %>%
+  select(station_id, station_name, latitude, longitude, everything()) %>%
+  write_csv("baseline data assigned to duplicate stations.csv")
+
+tp_stns %>%
+  group_by(latitude, longitude) %>%
+  filter(n() > 1) %>%
+  arrange(latitude, longitude)
+
+
+baseline_data %>%
+  filter(station_id == 10040536, year == 2022)
 
 
 
-tp_data <- bind_rows(
-  read_csv("nutrient/tp-data-2019.csv"),
-  read_csv("nutrient/tp-data-2020.csv"),
-  read_csv("nutrient/tp-data-2021.csv")
-  ) %>%
-  mutate(num_obs = rowSums(!is.na(select(., May:October)))) %>%
-  filter(num_obs > 0) %>%
-  pivot_longer(
-    cols = May:October,
-    names_to = "month_name",
-    values_to = "tp") %>%
-  mutate(month = match(month_name, month.name), .before = "month_name") %>%
-  mutate(date = as.Date(paste(year, month, 15, sep = "-")), .after = "month_name")
-
-# if anything show up it needs to be added to the station list
-tp_data %>%
-  count(station_id, station_name) %>%
-  filter(!(station_id %in% all_stns$station_id)) %>%
-  mutate(latitude = "", longitude = "", wbic = "", waterbody_name = "")
-
-# %>%
-#   write_csv("nutrient/missing-nutrient-sites.csv")
-
-tp_joined <- tp_data %>%
-  select(-station_name) %>%
-  left_join(all_stns)
-
-tp_joined %>% write_csv("nutrient_clean/tp-data.csv")
-
-
-
-
-# Thermistor data ---------------------------------------------------------
-
-# for now this is its own project under /Thermistor Data
-
-
-
-# Station crossref --------------------------------------------------------
-
-# baseline stations not in station lists
-missing_baseline <- baseline_joined %>%
-  count(station_id, station_name, name = "baseline_obs") %>%
-  filter(!(station_id %in% all_stns$station_id))
-missing_baseline %>%
-  mutate(wbic = "", official_name = "", latitude = "", longitude = "") %>%
-  write_csv("stations/missing-baseline-stations.csv")
 
