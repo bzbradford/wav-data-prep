@@ -66,37 +66,16 @@ huc12 %>%
 
 # Station lists -----------------------------------------------------------
 
-stn_wbics <- read_csv("stations/swims-all-stations-bad-lat-lon.csv", col_types = list(.default = "c", STATION_ID = "d")) %>%
-  clean_names() %>%
-  select(station_id, wbic, waterbody)
-
-# is missing wbic and waterbody name. List of all stations as a backup
 stn_list <- read_csv("stations/swims-all-stations.csv", col_types = list(.default = "c", STATION_ID = "d")) %>%
   clean_names() %>%
-  mutate(station_name = str_replace_all(station_name, "[^[:print:]]", "")) %>%
-  arrange(station_id) %>%
-  left_join(stn_wbics)
-
-# # has wbic and waterbody name
-# cbsm_stns <- read_csv("stations/cbsm-locs.csv", col_types = cols(.default = "c")) %>%
-#   clean_names() %>%
-#   drop_na(latitude, longitude) %>%
-#   distinct(latitude, longitude, .keep_all = T)
-
-# tp_stns <- read_csv("stations/tp-locs.csv", col_types = cols(.default = "c"))
-#
-# therm_stns <- read_csv("stations/therm-locs.csv", col_types = cols(.default = "c"))
-#
-# # additional stations, if missing from the cbsm list
-# extra_stns <- read_csv("stations/additional-locs.csv", col_types = cols(.default = "c"))
-
-
-
-# bind in order of best to worst data
-# stn_list <- bind_rows(cbsm_stns, tp_stns, therm_stns, extra_stns, swims_stns) %>%
-#   distinct(station_id, .keep_all = T) %>%
-#   arrange(station_id)
-
+  select(
+    station_id,
+    station_name = primary_station_name,
+    wbic,
+    waterbody = official_waterbody_name,
+    latitude,
+    longitude) %>%
+  mutate(station_name = str_replace_all(station_name, "[^[:print:]]", ""))
 
 
 # Baseline data -----------------------------------------------------------
