@@ -272,3 +272,66 @@ volunteer_fieldwork_counts %>%
   pivot_wider(names_from = year, values_from = n, values_fill = 0) %>%
   write_csv("baseline volunteer counts.csv")
 
+
+
+# Stream widths -----------------------------------------------------------
+
+baseline_final$stream_width %>% summary()
+names(test)
+unname(test)
+
+quantiles <- baseline_final$stream_width %>%
+  quantile(probs = c(.05, .25, .5, .75, .95), na.rm = T) %>%
+  {tibble(name = names(.), value = unname(.))}
+
+baseline_final %>%
+  ggplot(aes(x = stream_width)) +
+  geom_histogram(fill = "#c5050c", alpha = .5) +
+  geom_vline(xintercept = quantiles$value, linetype = "dashed") +
+  geom_text(
+    data = quantiles,
+    aes(x = value, y = 0, label = name),
+    angle = 90,
+    hjust = -.25,
+    vjust = -.5) +
+  scale_x_sqrt(breaks = quantiles$value, expand = expansion(c(0, .1))) +
+  scale_y_continuous(expand = expansion(c(0, .1))) +
+  labs(x = "Stream Width (ft.)", y = "Number of observations") +
+  theme(axis.text.x = element_text(size = 11))
+
+baseline_final$stream_width %>%
+  quantile(probs = c(.25, .5, .75, .95), na.rm = T)
+
+
+
+
+# Correlation matrix ------------------------------------------------------
+
+library(ggcorrplot)
+
+names(baseline_final)
+
+corr <- baseline_final %>%
+  select(
+    water_temperature,
+    ambient_air_temp,
+    d_o,
+    d_o_percent_saturation,
+    transparency_average,
+    stream_width,
+    average_stream_depth,
+    stream_flow_cfs
+  ) %>%
+  janitor::clean_names("title") %>%
+  cor(
+    use = "complete.obs",
+    method = "spearman")
+
+corr %>%
+  ggcorrplot(
+    hc.order = T,
+    outline.col = "black",
+    type = "lower",
+    ggtheme = ggplot2::theme_grey,
+    lab = T)
+
