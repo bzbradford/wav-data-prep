@@ -1,15 +1,16 @@
 # data prep for WAV dashboard
 
 library(tidyverse)
-library(sf)
 library(janitor)
-library(leaflet)
 library(lubridate)
-library(rmapshaper)
-library(mapview)
+library(sf)
 
 
 # Shapefiles --------------------------------------------------------------
+
+library(leaflet)
+library(rmapshaper)
+library(mapview)
 
 counties <- read_sf("shp/wi-counties.shp") %>%
   clean_names(case = "big_camel") %>%
@@ -76,6 +77,7 @@ stn_list <- read_csv("stations/swims-all-stations.csv", col_types = list(.defaul
     latitude,
     longitude) %>%
   mutate(station_name = str_replace_all(station_name, "[^[:print:]]", ""))
+
 
 
 # Baseline data -----------------------------------------------------------
@@ -170,7 +172,7 @@ baseline_data <- baseline_obs %>%
   arrange(year, station_id, date)
 
 baseline_final <- baseline_data %>%
-  left_join(all_stns) %>%
+  left_join(stn_list) %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date)
 
@@ -181,7 +183,8 @@ baseline_final <- baseline_data %>%
 tp_data <- list(
   "nutrient/tp-data-2019.csv",
   "nutrient/tp-data-2020.csv",
-  "nutrient/tp-data-2021.csv"
+  "nutrient/tp-data-2021.csv",
+  "nutrient/tp-data-2022.csv"
 ) %>%
   lapply(read_csv, col_types = cols(.default = "c", station_id = "d")) %>%
   bind_rows() %>%
@@ -197,7 +200,7 @@ tp_data <- list(
   arrange(year, station_id, date)
 
 tp_final <- tp_data %>%
-  left_join(all_stns) %>%
+  left_join(stn_list) %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date)
 
@@ -415,7 +418,8 @@ keep_stns <- unique(c(
   baseline_data$station_id,
   tp_data$station_id,
   therm_stns$station_id
-))
+)) %>%
+  na.omit()
 
 # create sf
 all_stns.sf <- stn_list %>%
@@ -425,9 +429,21 @@ all_stns.sf <- stn_list %>%
   st_join(select(huc8, huc8_name = Huc8Name)) %>%
   st_join(select(huc10, huc10_name = Huc10Name)) %>%
   st_join(select(huc12, huc12_name = Huc12Name)) %>%
+  st_join({
+    nkes %>%
+      select(
+        nke_plan_name = PlanName,
+        nke_plan_purpose = PurposeDe,
+        nke_plan_objective = Objective,
+        nke_start = StartDate,
+        nke_end = EndDate) %>%
+      mutate(across(where(is_character), ~str_to_sentence(str_trim(gsub("[\r\n]", "", .x)))))
+  }) %>%
   select(
     station_id,
     station_name,
+    latitude,
+    longitude,
     wbic,
     waterbody,
     county_name = CountyNam,
@@ -435,8 +451,11 @@ all_stns.sf <- stn_list %>%
     huc8_name,
     huc10_name,
     huc12_name,
-    latitude,
-    longitude,
+    nke_plan_name,
+    nke_plan_purpose,
+    nke_plan_objective,
+    nke_start,
+    nke_end,
     geometry
   ) %>%
   arrange(station_id)
