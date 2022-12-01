@@ -335,3 +335,103 @@ corr %>%
     ggtheme = ggplot2::theme_grey,
     lab = T)
 
+
+
+
+# Stream flows ------------------------------------------------------------
+
+library(tidyverse)
+
+# normalize streamflow by log10
+baseline_final$stream_flow_cfs %>%
+  log10() %>%
+  hist()
+
+# streamflow blob plot
+baseline_final %>%
+  mutate(newdate = yday + as.Date("2022-01-01")) %>%
+  ggplot(aes(x = newdate, y = stream_flow_cfs)) +
+  geom_density_2d_filled() +
+  geom_point(shape = 21, size = 0.5, alpha = .5, color = "black", fill = "white") +
+  scale_x_date(
+    limits = as.Date(c("2022-04-15", "2022-11-15")),
+    breaks = "1 month",
+    date_labels = "%b",
+    expand = expansion()) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x) 10^x),
+    labels = scales::label_number(),
+    # labels = scales::trans_format("log10", scales::math_format(10^.x)),
+    expand = expansion()) +
+  labs(x = NULL, y = "Stream Flow (cfs)") +
+  theme(legend.position = "none")
+
+# streamflow median by week
+baseline_final %>%
+  mutate(week = ceiling(yday / 7)) %>%
+  group_by(week) %>%
+  summarize(
+    cfs = median(stream_flow_cfs, na.rm = T),
+    n = n()) %>%
+  mutate(date = as.Date("2022-01-01") + (week - 1) * 7) %>%
+  ggplot(aes(x = date, y = cfs)) +
+  geom_col(aes(fill = cfs), color = "black") +
+  geom_text(aes(label = n), vjust = -.5, size = 3) +
+  stat_smooth(
+    geom = "line",
+    method = "loess",
+    span = 0.3,
+    se = F,
+    color = "#c5050c",
+    size = 2,
+    alpha = .75) +
+  scale_x_date(
+    limits = as.Date("2022-01-01") + c(10, 48) * 7,
+    breaks = "1 month",
+    date_labels = "%b",
+    expand = expansion()) +
+  scale_y_continuous(limits = c(0, 20)) +
+  labs(
+    x = NULL,
+    y = "Median Stream Flow (cfs)",
+    title = "Median stream flow by week (2019-2022)",
+    caption = "Number of observations shown above each bar") +
+  theme(legend.position = "none")
+
+ggsave("analysis/Median stream flow by week.png")
+
+# streamflow medians by any chunk size
+# have to adjust the geom_smooth span size to fit the line right
+days <- 14
+baseline_final %>%
+  mutate(week = ceiling(yday / days)) %>%
+  group_by(week) %>%
+  summarize(
+    cfs = median(stream_flow_cfs, na.rm = T),
+    n = n()) %>%
+  mutate(date = as.Date("2022-01-01") + (week - 1) * days) %>%
+  ggplot(aes(x = date, y = cfs)) +
+  geom_col(aes(fill = cfs), color = "black") +
+  geom_text(aes(label = n), vjust = -.5, size = 3) +
+  stat_smooth(
+    geom = "line",
+    method = "loess",
+    span = .5,
+    se = F,
+    color = "#c5050c",
+    size = 2,
+    alpha = .75) +
+  scale_x_date(
+    limits = as.Date("2022-01-01") + c(10, 48) * 7,
+    breaks = "1 month",
+    date_labels = "%b",
+    expand = expansion()) +
+  scale_y_continuous(limits = c(0, 20)) +
+  labs(
+    x = NULL,
+    y = "Median Stream Flow (cfs)",
+    title = "Median stream flow by fornight (2019-2022)",
+    caption = "Number of observations shown above each bar") +
+  theme(legend.position = "none")
+
+ggsave("analysis/Median stream flow by fortnight.png")
