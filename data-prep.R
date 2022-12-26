@@ -12,6 +12,7 @@ library(leaflet)
 library(rmapshaper)
 library(mapview)
 
+## County Bounds ----
 counties <- read_sf("shp/wi-counties.shp") %>%
   clean_names(case = "big_camel") %>%
   rename(
@@ -24,50 +25,72 @@ counties %>%
   ms_simplify(0.5) %>%
   write_sf("shp_clean/wi-counties.shp")
 
-nkes <- read_sf("shp/nke-plans-2022.shp") %>%
-  clean_names(case = "big_camel") %>%
-  select(-"ShapeLe1") %>%
-  rename(ShapeLen = ShapeLeng)
-npts(nkes)
-ggplot(nkes) + geom_sf()
-nkes %>%
-  ms_simplify(0.5) %>%
-  write_sf("shp_clean/nke-plans-2022.shp")
 
+## HUCs ----
 huc8 <- read_sf("shp/wi-huc-8.shp") %>%
   clean_names(case = "big_camel") %>%
   rename(ShapeArea = ShapeAre)
 npts(huc8)
 ggplot(huc8) + geom_sf()
-huc8 %>%
-  ms_simplify(0.5) %>%
-  write_sf("shp_clean/wi-huc-8.shp")
+huc8_simp <- huc8 %>%
+  ms_simplify(0.5)
 
+huc8_simp %>% write_sf("shp_clean/wi-huc-8.shp")
+huc8_simp %>% write_sf("../Dashboard/shp/wi-huc-8.shp")
 
 huc10 <- read_sf("shp/wi-huc-10.shp") %>%
   clean_names(case = "big_camel") %>%
   rename(ShapeArea = ShapeAre)
 npts(huc10)
 ggplot(huc10) + geom_sf()
-huc10 %>%
-  ms_simplify(0.5) %>%
-  write_sf("shp_clean/wi-huc-10.shp")
+huc10_simp <- huc10 %>%
+  ms_simplify(0.5)
 
+huc10_simp %>% write_sf("shp_clean/wi-huc-10.shp")
+huc10_simp %>% write_sf("../Dashboard/shp/wi-huc-10.shp")
 
 huc12 <- read_sf("shp/wi-huc-12.shp") %>%
   clean_names(case = "big_camel") %>%
   rename(ShapeArea = ShapeAre)
 npts(huc12)
 ggplot(huc12) + geom_sf()
-huc12 %>%
-  ms_simplify(0.5) %>%
-  write_sf("shp_clean/wi-huc-12.shp")
+huc12_simp <- huc12 %>%
+  ms_simplify(0.5)
+
+huc12_simp %>% write_sf("shp_clean/wi-huc-12.shp")
+huc12_simp %>% write_sf("../Dashboard/shp/wi-huc-12.shp")
+
+
+## NKEs ----
+nkes <- read_sf("shp/nke-plans-2022.shp") %>%
+  clean_names(case = "big_camel") %>%
+  select(-"ShapeLe1") %>%
+  rename(ShapeLen = ShapeLeng) %>%
+  drop_na(PlanId) %>%
+  st_transform(4326)
+nke_data <- nkes %>%
+  select(
+    nke_plan_name = PlanName,
+    nke_plan_purpose = PurposeDe,
+    nke_plan_objective = Objective,
+    nke_start = StartDate,
+    nke_end = EndDate) %>%
+  mutate(across(where(is_character), ~str_to_sentence(str_trim(gsub("[\r\n]", "", .x)))))
+npts(nkes)
+ggplot(nkes) + geom_sf()
+
+nkes_simp <- nkes %>%
+  ms_simplify(0.5)
+
+nkes_simp %>% write_sf("shp_clean/nke-plans-2022.shp")
+nkes_simp %>% write_sf("../Dashboard/shp/nke-plans-2022.shp")
 
 
 
 # Station lists -----------------------------------------------------------
 
-stn_list <- read_csv("stations/swims-all-stations.csv", col_types = list(.default = "c", STATION_ID = "d")) %>%
+stn_list <- "stations/SWIMS Station Export v2022-12-22.csv" %>%
+  read_csv(col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
   clean_names() %>%
   select(
     station_id,
@@ -76,15 +99,24 @@ stn_list <- read_csv("stations/swims-all-stations.csv", col_types = list(.defaul
     waterbody = official_waterbody_name,
     latitude,
     longitude) %>%
-  mutate(station_name = str_replace_all(station_name, "[^[:print:]]", ""))
+  mutate(station_name = str_squish(str_replace_all(station_name, "[^[:alnum:][:punct:] ]", ""))) %>%
+  distinct(station_id, .keep_all = T) %>%
+  arrange(station_id) %>%
+  drop_na(station_id, latitude, longitude)
 
 
 
 # Baseline data -----------------------------------------------------------
 
-baseline_obs <- list(
-  "baseline/Baseline Data 2019-2021.csv",
-  "baseline/Baseline Data 2022.csv") %>%
+baseline_files <- file.path(
+  "baseline",
+  list(
+    "2019-2021 Baseline Data.csv",
+    "2022 Baseline Data v2022-12-22.csv"
+  )
+)
+
+baseline_obs <- baseline_files %>%
   lapply(read_csv, col_types = list(.default = "c", STATION_ID = "d")) %>%
   bind_rows() %>%
   clean_names() %>%
@@ -128,11 +160,17 @@ add_units <- function(.data, col, units) {
 }
 
 # Stream flow data
-flow_obs <- list(
-  "baseline/Flow Data 2019.csv",
-  "baseline/Flow Data 2020.csv",
-  "baseline/Flow Data 2021.csv",
-  "baseline/Flow Data 2022.csv") %>%
+flow_files <- file.path(
+  "baseline",
+  list(
+    "2019 Flow Data.csv",
+    "2020 Flow Data.csv",
+    "2021 Flow Data.csv",
+    "2022 Flow Data v2022-12-22.csv"
+  )
+)
+
+flow_obs <- flow_files %>%
   lapply(read_csv, col_types = list(.default = "c", STATION_ID = "d")) %>%
   bind_rows() %>%
   clean_names() %>%
@@ -176,6 +214,8 @@ baseline_final <- baseline_data %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date)
 
+baseline_final %>% write_csv("baseline_clean/baseline-data.csv")
+# baseline_final %>% write_csv("../Dashboard/data/baseline-data.csv.gz")
 
 
 # Nutrient data -----------------------------------------------------------
@@ -204,6 +244,8 @@ tp_final <- tp_data %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date)
 
+tp_final %>% write_csv("nutrient_clean/tp-data.csv")
+# tp_final %>% write_csv("../Dashboard/data/tp-data.csv")
 
 
 # Thermistor data ---------------------------------------------------------
@@ -375,6 +417,13 @@ hobo_data %>%
   )
 
 
+## Export ----
+
+therm_inventory %>% write_csv("therm_clean/therm-info.csv")
+# therm_inventory %>% write_csv("../Dashboard/data/therm-info.csv")
+
+hobo_data %>% write_csv("therm_clean/therm-data.csv.gz")
+# hobo_data %>% write_csv("../Dashboard/data/therm-data.csv.gz")
 
 
 
@@ -390,6 +439,9 @@ baseline_data %>%
   count(station_id) %>%
   filter(!(station_id %in% stn_list$station_id))
 
+stn_tally_baseline <- baseline_data %>%
+  group_by(station_id) %>%
+  count()
 
 ## Check nutrient ----
 
@@ -421,24 +473,16 @@ keep_stns <- unique(c(
 )) %>%
   na.omit()
 
+count(baseline_data, station_id, name = "baseline_obs")
+
 # create sf
-all_stns.sf <- stn_list %>%
+stn_list.sf <- stn_list %>%
   filter(station_id %in% keep_stns) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
   st_join(select(counties, DnrRegion, CountyNam)) %>%
   st_join(select(huc8, huc8_name = Huc8Name)) %>%
   st_join(select(huc10, huc10_name = Huc10Name)) %>%
   st_join(select(huc12, huc12_name = Huc12Name)) %>%
-  st_join({
-    nkes %>%
-      select(
-        nke_plan_name = PlanName,
-        nke_plan_purpose = PurposeDe,
-        nke_plan_objective = Objective,
-        nke_start = StartDate,
-        nke_end = EndDate) %>%
-      mutate(across(where(is_character), ~str_to_sentence(str_trim(gsub("[\r\n]", "", .x)))))
-  }) %>%
   select(
     station_id,
     station_name,
@@ -451,14 +495,10 @@ all_stns.sf <- stn_list %>%
     huc8_name,
     huc10_name,
     huc12_name,
-    nke_plan_name,
-    nke_plan_purpose,
-    nke_plan_objective,
-    nke_start,
-    nke_end,
     geometry
   ) %>%
-  arrange(station_id)
+  # st_join(nke_data) %>%
+  distinct(station_id, .keep_all = T)
 
 # Plot stations
 all_stns.sf %>%
@@ -481,26 +521,11 @@ baseline_stns <- all_stns %>%
 tp_stns <- all_stns %>%
   filter(station_id %in% tp_data$station_id)
 
-
-# Export data -------------------------------------------------------------
-
 all_stns %>% write_csv("stations_clean/station-list.csv")
 # all_stns %>% write_csv("../Dashboard/data/station-list.csv")
 
-baseline_final %>% write_csv("baseline_clean/baseline-data.csv")
-# baseline_final %>% write_csv("../Dashboard/data/baseline-data.csv.gz")
 
-tp_final %>% write_csv("nutrient_clean/tp-data.csv")
-# tp_final %>% write_csv("../Dashboard/data/tp-data.csv")
-
-therm_inventory %>% write_csv("therm_clean/therm-info.csv")
-# therm_inventory %>% write_csv("../Dashboard/data/therm-info.csv")
-
-hobo_data %>% write_csv("therm_clean/therm-data.csv.gz")
-# hobo_data %>% write_csv("../Dashboard/data/therm-data.csv.gz")
-
-
-# Misc --------------------------------------------------------------------
+# Misc/Test --------------------------------------------------------------------
 
 all_stns %>%
   filter(station_id == 223252)
@@ -534,5 +559,8 @@ baseline_data %>%
   filter(station_id == 10040536, year == 2022)
 
 
+baseline_final %>%
+  group_by(station_id, year) %>%
+  tally()
 
 
