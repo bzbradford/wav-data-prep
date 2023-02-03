@@ -385,7 +385,7 @@ therm_stns %>%
 ## Add locations to hobo data and trim----
 
 hobo_data <- hobo_data_raw %>%
-  left_join(therm_stns) %>%
+  left_join(therm_stns, multiple = "all") %>%
   drop_na(station_id) %>%
   mutate(
     after_deploy = ifelse(is.na(date_deployed), TRUE, date_time > date_deployed),
@@ -393,7 +393,11 @@ hobo_data <- hobo_data_raw %>%
   ) %>%
   filter(after_deploy & before_removed) %>%
   select(logger_sn:temp_c, station_id, station_name, latitude, longitude) %>%
-  filter(year == lubridate::year(date))
+  filter(year == lubridate::year(date)) %>%
+  mutate(
+    month = lubridate::month(date),
+    day = lubridate::day(date),
+    .after = "year")
 
 # should show that no rows are missing location data
 hobo_data %>% filter(is.na(latitude))

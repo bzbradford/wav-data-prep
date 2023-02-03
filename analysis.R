@@ -435,3 +435,34 @@ baseline_final %>%
   theme(legend.position = "none")
 
 ggsave("analysis/Median stream flow by fortnight.png")
+
+
+
+# Pecatonica River wav stations ------------------------------------------
+
+# pecatonica pride
+
+library(leaflet)
+
+stn_coverage <- read_csv("analysis/station data coverage.csv")
+
+stn_list.sf %>%
+  st_set_geometry(NULL) %>%
+  left_join(stn_coverage) %>%
+  janitor::clean_names(case = "big_camel") %>%
+  write_csv("analysis/2019-2022 WAV Station List.csv")
+
+stn_list.sf %>%
+  filter(huc8_name == "Pecatonica") %>%
+  leaflet() %>%
+  addTiles() %>%
+  addPolygons(data = huc8) %>%
+  addPolygons(data = huc10, color = "green", label = ~Huc10Name) %>%
+  addMarkers(label = ~station_name)
+
+stn_list.sf %>%
+  filter(huc10_name %in% c("East Branch Pecatonica River", "Spafford Creek-Pecatonica River")) %>%
+  st_set_geometry(NULL) %>%
+  left_join(stn_coverage) %>%
+  janitor::clean_names(case = "big_camel") %>%
+  write_csv("analysis/Pecatonica sites.csv")
