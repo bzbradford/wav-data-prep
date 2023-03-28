@@ -123,9 +123,9 @@ baseline_obs <- baseline_files %>%
   select(
     station_id,
     # station_name = primary_station_name,
-    # station_type_code,
+    station_type_code,
     # secondary_station_type,
-    # fieldwork_seq_no,
+    fieldwork_seq_no,
     group_desc,
     date = start_date,
     # sample_header_seq_no,
@@ -271,6 +271,11 @@ parse_hobos <- function(dir, year) {
     )
   }
 
+  warn <- function(sn, msg) {
+    message(" => ", msg)
+    warning("SN ", sn, ": ", msg, call. = F)
+  }
+
   files <- list.files(dir, "*.csv", full.names = T)
 
   if (length(files) == 0) stop("No csv files found in directory '", dir, "'")
@@ -282,18 +287,19 @@ parse_hobos <- function(dir, year) {
 
   raw_data <- lapply(files, function(file) {
 
-    if (file_ext(file) != "csv") return(warning("File '", file, "' is not a csv!"))
-    fname <- gsub(".csv", "", basename(file))
+    # check file name and get logger SN
+    if (file_ext(file) != "csv") stop("File '", file, "' is not a csv!")
+    sn <- gsub(".csv", "", basename(file))
 
+    # try to process data
     tryCatch({
-
       first_line <- readLines(file, n = 1)
       skip <- 0
 
       if (grepl("Plot", first_line)) skip <- 1
 
-      import <- suppressMessages(read_csv(file, skip = skip, col_types = cols()))
-      message(paste0("\nSN: ", fname))
+      import <- read_csv(file, skip = skip, show_col_types = F, col_select = 1:3)
+      message(paste0("\nSN: ", sn))
 
       if (grepl("(*F)", names(import)[3])) {
         unit <- "F"
@@ -308,7 +314,7 @@ parse_hobos <- function(dir, year) {
         mutate(Temp = round(Temp, 2)) %>%
         mutate(Unit = unit) %>%
         drop_na() %>%
-        mutate(LoggerSN = as.numeric(fname), .before = 1) %>%
+        mutate(LoggerSN = as.numeric(sn), .before = 1) %>%
         mutate(DateTime = lubridate::parse_date_time(DateTime, c("mdy HMS p", "mdy HMS", "ymd HMS"))) %>%
         mutate(Date = as.Date(DateTime), .before = DateTime) %>%
         mutate(TempOK = temp_check(Temp, Unit))
@@ -317,14 +323,16 @@ parse_hobos <- function(dir, year) {
         " => ", nrow(data), " obs\n",
         " => ", as.Date(min(data$Date)), " - ", as.Date(max(data$Date)), "\n",
         " => ", min(data$Temp), " - ", max(data$Temp), " °", unit, "\n"))
+
       if (lubridate::year(min(data$Date)) != lubridate::year(max(data$Date))) {
-        message("WARNING: Multiple years in data range!")
+        warn(sn, "Multiple years in data range!")
       }
+
       if (!all(data$TempOK)) {
         before <- nrow(data)
         data <- filter(data, TempOK)
         after <- nrow(data)
-        message("WARNING: Removed ", before - after, " temperature value(s) out of range!")
+        warn(sn, paste0("Removed ", before - after, " temperature value(s) out of range!"))
       }
 
       data %>%
@@ -333,7 +341,9 @@ parse_hobos <- function(dir, year) {
           TempC = ifelse(Unit == "C", Temp, round(f_to_c(Temp), 2))) %>%
         select(-c("Temp", "Unit", "TempOK"))
     },
-      error = function(e) { message("FATAL: Failed to parse data for SN ", fname,": ", e, "\n") }
+      error = function(e) {
+        warn(sn, "FATAL: Failed to parse data: ", e, "\n")
+      }
     )
   })
 
@@ -379,7 +389,8 @@ therm_stns <- hobo_sns %>%
 
 # Any loggers missing stations?
 therm_stns %>%
-  filter(is.na(station_id))
+  filter(is.na(station_id)) # %>%
+  #write_csv("missing logger stations.csv")
 
 
 ## Add locations to hobo data and trim----

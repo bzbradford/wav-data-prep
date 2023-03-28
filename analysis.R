@@ -1,4 +1,6 @@
 library(tidyverse)
+library(sf)
+library(leaflet)
 
 
 # how many 2021 baseline or nutrient sites were in a NKE?
@@ -274,6 +276,25 @@ volunteer_fieldwork_counts %>%
 
 
 
+# Number of fieldwork events ----------------------------------------------
+
+baseline_final %>%
+  group_by(year) %>%
+  summarize(
+    sites = n_distinct(station_id),
+    events = n()
+  )
+
+tp_final %>%
+  group_by(year) %>%
+  summarize(
+    sites = n_distinct(station_id),
+    events = n()
+  )
+
+
+
+
 # Stream widths -----------------------------------------------------------
 
 baseline_final$stream_width %>% summary()
@@ -466,3 +487,29 @@ stn_list.sf %>%
   left_join(stn_coverage) %>%
   janitor::clean_names(case = "big_camel") %>%
   write_csv("analysis/Pecatonica sites.csv")
+
+
+
+# Counties monitoried in 2022 ---------------------------------------------
+
+stns_2022 <- unique(c(
+  { baseline_data %>% filter(year == 2022) %>% pull(station_id) },
+  { tp_data %>% filter(year == 2022) %>% pull(station_id) },
+  { therm_inventory %>% filter(year == 2022) %>% pull(station_id) }
+))
+
+stn_list.sf %>%
+  filter(station_id %in% stns_2022) %>%
+  distinct(county_name)
+
+stn_list.sf %>%
+  filter(station_id %in% stns_2022) %>%
+  leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(
+    stroke = F,
+    radius = 4,
+    fillOpacity = 1
+  )
+
+
