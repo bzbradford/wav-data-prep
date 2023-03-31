@@ -382,6 +382,16 @@ hobo_sns <- hobo_data_raw %>%
 # Load thermistor inventory, matching SNs with WAV Stns
 therm_inventory <- read_csv("therm/therm-inventory.csv")
 
+# Are we missing data for loggers in the inventory?
+
+therm_inventory %>%
+  left_join({
+    hobo_sns %>%
+      mutate(have_data = T)
+    }) %>%
+  replace_na(list(have_data = F)) %>%
+  write_csv("Thermistors - missing data for loggers in inventory.csv")
+
 # Join the inventory
 therm_stns <- hobo_sns %>%
   left_join(therm_inventory) %>%
@@ -389,8 +399,9 @@ therm_stns <- hobo_sns %>%
 
 # Any loggers missing stations?
 therm_stns %>%
-  filter(is.na(station_id)) # %>%
-  #write_csv("missing logger stations.csv")
+  filter(is.na(station_id)) %>%
+  write_csv("Thermistors - missing logger stations.csv")
+
 
 
 ## Add locations to hobo data and trim----
@@ -403,7 +414,7 @@ hobo_data <- hobo_data_raw %>%
     before_removed = ifelse(is.na(date_removed), TRUE, date_time < date_removed)
   ) %>%
   filter(after_deploy & before_removed) %>%
-  select(logger_sn:temp_c, station_id, station_name, latitude, longitude) %>%
+  select(year:temp_c, logger_sn, device_type, station_id, station_name, latitude, longitude) %>%
   filter(year == lubridate::year(date)) %>%
   mutate(
     month = lubridate::month(date),
