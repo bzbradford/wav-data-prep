@@ -490,20 +490,33 @@ stn_list.sf %>%
 
 
 
-# Counties monitoried in 2022 ---------------------------------------------
 
-stns_2022 <- unique(c(
-  { baseline_data %>% filter(year == 2022) %>% pull(station_id) },
-  { tp_data %>% filter(year == 2022) %>% pull(station_id) },
-  { therm_inventory %>% filter(year == 2022) %>% pull(station_id) }
-))
+# 2022 Data Analysis ------------------------------------------------------
+
+## Counties monitoried in 2022 ----
+
+get_stns <- function(d, y = 2022) {
+  d %>%
+    filter(year == y) %>%
+    pull(station_id) %>%
+    unique() %>%
+    sort()
+}
+
+stns_2022 <- list()
+stns_2022$baseline <- get_stns(baseline_data)
+stns_2022$nutrient <- get_stns(tp_data)
+stns_2022$thermistor <- get_stns(hobo_data)
+stns_2022$all <- sort(unique(unlist(stns_2022)))
+
+lapply(stns_2022, length)
 
 stn_list.sf %>%
-  filter(station_id %in% stns_2022) %>%
+  filter(station_id %in% stns_2022$all) %>%
   distinct(county_name)
 
 stn_list.sf %>%
-  filter(station_id %in% stns_2022) %>%
+  filter(station_id %in% stns_2022$all) %>%
   leaflet() %>%
   addTiles() %>%
   addCircleMarkers(
@@ -513,3 +526,132 @@ stn_list.sf %>%
   )
 
 
+
+## 2022 Sites Map ----
+
+library(leaflet)
+library(shiny)
+
+stn_colors <- list(
+  "baseline" = "green",
+  "thermistor" = "purple",
+  "nutrient" = "orange",
+  "current" = "deepskyblue"
+)
+
+stns_2022.sf <- all_stns.sf %>%
+  select(station_id:longitude, geometry) %>%
+  filter(station_id %in% stns_2022$all) %>%
+  mutate(
+    baseline = station_id %in% stns_2022$baseline,
+    nutrient = station_id %in% stns_2022$nutrient,
+    thermistor = station_id %in% stns_2022$thermistor,
+  )
+
+leaflet() %>%
+  fitBounds(lat1 = 42.4, lat2 = 47.1, lng1 = -92.9, lng2 = -86.8) %>%
+  addProviderTiles(providers$Esri.WorldTopoMap) %>%
+  # addProviderTiles(providers$CartoDB.Positron) %>%
+  # addProviderTiles(providers$OpenStreetMap) %>%
+  addPolygons(
+    data = counties,
+    label = ~ lapply(paste0("<b>", CountyNam, " County</b><br>", DnrRegion), HTML),
+    fillOpacity = 0.1,
+    color = "grey",
+    opacity = 0.5,
+    fillColor = ~ colorFactor("Dark2", counties$DnrRegion)(DnrRegion),
+    weight = 1
+  ) %>%
+  addPolygons(
+    data = nkes,
+    label = ~ lapply(paste0("<b>", PlanName, "</b><br>Ends: ", EndDate, "<br>Objective: ", Objective), HTML),
+    weight = 1,
+    color = "blue",
+    fillColor = "blue",
+    fillOpacity = 0.1,
+    labelOptions = labelOptions(style = list("width" = "300px", "white-space" = "normal"))
+  ) %>%
+  addCircleMarkers(
+    data = filter(stns_2022.sf, baseline),
+    radius = 4,
+    color = "black",
+    weight = 1,
+    fillColor = stn_colors$baseline,
+    fillOpacity = 0.75
+  ) %>%
+  addCircleMarkers(
+    data = filter(stns_2022.sf, nutrient),
+    radius = 4,
+    color = "black",
+    weight = 1,
+    fillColor = stn_colors$nutrient,
+    fillOpacity = 0.75
+  ) %>%
+  addCircleMarkers(
+    data = filter(stns_2022.sf, thermistor),
+    radius = 4,
+    color = "black",
+    weight = 1,
+    fillColor = stn_colors$thermistor,
+    fillOpacity = 0.75
+  )
+
+
+## Stations in NKEs ----
+
+nke_union <- st_union(nkes)
+
+nke_stns_2022.sf <- stns_2022.sf %>%
+  st_join(nkes) %>%
+  filter(!is.na(Objectid)) %>%
+  distinct(station_id, .keep_all = T) %>%
+  select(station_id:geometry, baseline, nutrient, thermistor)
+
+stns_in_nkes_2022_long <- stns_in_nkes_2022 %>%
+  pivot_longer(
+    cols = c(baseline, nutrient, thermistor),
+    names_to = "type", values_to = "is_station") %>%
+  filter(is_station) %>%
+  mutate(type = str_to_title(type)) %>%
+  group_by(type) %>%
+  mutate(n_stns = n()) %>%
+  mutate(label = paste0(type, " (", n_stns, " stations)"))
+
+ggplot() +
+  geom_sf(data = counties) +
+  geom_sf(data = nke_union, color = "blue", fill = "steelblue", alpha = 0.5) +
+  geom_sf(
+    data = stns_in_nkes_2022_long,
+    aes(fill = label),
+    shape = 21,
+    size = 2) +
+  scale_fill_manual(
+    name = "Station Types",
+    values = c("darkgreen", "purple", "orange")
+  ) +
+  labs(title = paste0("2022 WAV Monitoring Stations in NKE Plan Watersheds (", nrow(nke_stns_2022.sf), " total)")) +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", family = "Verdana"),
+    legend.position = c(.8, .9),
+    legend.box.background = element_rect(color = "black", fill = "white"),
+    legend.box.margin = margin(5, 5, 5, 5))
+
+ggsave("analysis/2022 monitoring stations in NKE plans map.png")
+
+
+## 2022 Hobo summary ----
+
+therm_stns %>% filter(year == 2022)
+hobo_data %>%
+  filter(year == 2022) %>%
+  group_by(station_id) %>%
+  summarise(
+    min_date = min(date),
+    max_date = max(date),
+    deploy_length = max_date - min_date) %>%
+  summarize(
+    min_date = mean(min_date),
+    max_date = mean(max_date),
+    deploy_length = mean(deploy_length)
+  )

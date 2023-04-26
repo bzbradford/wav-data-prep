@@ -12,62 +12,32 @@ library(leaflet)
 library(rmapshaper)
 library(mapview)
 
+
 ## County Bounds ----
+
 counties <- read_sf("shp/wi-counties.shp") %>%
   clean_names(case = "big_camel") %>%
   rename(
     ShapeLen = Shapelen,
     ShapeArea = Shapearea
   )
+
 npts(counties)
 ggplot(counties) + geom_sf()
-counties %>%
-  ms_simplify(0.5) %>%
-  write_sf("shp_clean/wi-counties.shp")
 
-
-## HUCs ----
-huc8 <- read_sf("shp/wi-huc-8.shp") %>%
-  clean_names(case = "big_camel") %>%
-  rename(ShapeArea = ShapeAre)
-npts(huc8)
-ggplot(huc8) + geom_sf()
-huc8_simp <- huc8 %>%
-  ms_simplify(0.5)
-
-huc8_simp %>% write_sf("shp_clean/wi-huc-8.shp")
-huc8_simp %>% write_sf("../Dashboard/shp/wi-huc-8.shp")
-
-huc10 <- read_sf("shp/wi-huc-10.shp") %>%
-  clean_names(case = "big_camel") %>%
-  rename(ShapeArea = ShapeAre)
-npts(huc10)
-ggplot(huc10) + geom_sf()
-huc10_simp <- huc10 %>%
-  ms_simplify(0.5)
-
-huc10_simp %>% write_sf("shp_clean/wi-huc-10.shp")
-huc10_simp %>% write_sf("../Dashboard/shp/wi-huc-10.shp")
-
-huc12 <- read_sf("shp/wi-huc-12.shp") %>%
-  clean_names(case = "big_camel") %>%
-  rename(ShapeArea = ShapeAre)
-npts(huc12)
-ggplot(huc12) + geom_sf()
-huc12_simp <- huc12 %>%
-  ms_simplify(0.5)
-
-huc12_simp %>% write_sf("shp_clean/wi-huc-12.shp")
-huc12_simp %>% write_sf("../Dashboard/shp/wi-huc-12.shp")
+counties_simp <- ms_simplify(counties, 0.5)
+counties_simp %>% write_sf("shp_clean/wi-counties.shp")
 
 
 ## NKEs ----
+
 nkes <- read_sf("shp/nke-plans-2022.shp") %>%
   clean_names(case = "big_camel") %>%
   select(-"ShapeLe1") %>%
   rename(ShapeLen = ShapeLeng) %>%
   drop_na(PlanId) %>%
   st_transform(4326)
+
 nke_data <- nkes %>%
   select(
     nke_plan_name = PlanName,
@@ -76,18 +46,95 @@ nke_data <- nkes %>%
     nke_start = StartDate,
     nke_end = EndDate) %>%
   mutate(across(where(is_character), ~str_to_sentence(str_trim(gsub("[\r\n]", "", .x)))))
+
 npts(nkes)
 ggplot(nkes) + geom_sf()
 
-nkes_simp <- nkes %>%
-  ms_simplify(0.5)
-
+# simplify
+nkes_simp <- ms_simplify(nkes, 0.5)
 nkes_simp %>% write_sf("shp_clean/nke-plans-2022.shp")
-nkes_simp %>% write_sf("../Dashboard/shp/nke-plans-2022.shp")
 
 
+## HUCs ----
 
-# Station lists -----------------------------------------------------------
+# huc6 basins
+huc6 <- read_sf("shp/wi-huc-6.shp") %>%
+  clean_names(case = "big_camel") %>%
+  st_transform(crs = 4326) %>%
+  select(
+    MajorBasin = MajorBasi,
+    geometry
+  )
+
+# load huc8 subbasins and join huc6 info
+huc8 <- read_sf("shp/wi-huc-8.shp") %>%
+  clean_names(case = "big_camel") %>%
+  select(-ShapeLen) %>%
+  st_join(huc6, largest = T) %>%
+  select(
+    Huc8Code, Huc8Name,
+    MajorBasin,
+    Area = ShapeAre,
+    geometry
+  )
+
+# load huc10 watersheds and join huc8 info
+huc10 <- read_sf("shp/wi-huc-10.shp") %>%
+  clean_names(case = "big_camel") %>%
+  st_join(select(huc8, -Area), largest = T) %>%
+  select(
+    Huc10Code, Huc10Name,
+    Huc8Code, Huc8Name,
+    MajorBasin,
+    Area = ShapeAre,
+    geometry
+  )
+
+# load huc12 watersheds and join huc10 info
+huc12 <- read_sf("shp/wi-huc-12.shp") %>%
+  clean_names(case = "big_camel") %>%
+  st_join(select(huc10, -Area), largest = T) %>%
+  select(
+    Huc12Code, Huc12Name,
+    Huc10Code, Huc10Name,
+    Huc8Code, Huc8Name,
+    MajorBasin,
+    Area = ShapeAre,
+    geometry
+  )
+
+# checks
+npts(huc8)
+npts(huc10)
+npts(huc12)
+
+# plot
+ggplot(huc6) + geom_sf()
+ggplot(huc8) + geom_sf()
+ggplot(huc10) + geom_sf()
+ggplot(huc12) + geom_sf()
+
+# simplify shapefiles
+huc8_simp <- ms_simplify(huc8, 0.5)
+huc10_simp <- ms_simplify(huc10, 0.5)
+huc12_simp <- ms_simplify(huc12, 0.5)
+
+# save locally
+huc8_simp %>% write_sf("shp_clean/wi-huc-8.shp")
+huc10_simp %>% write_sf("shp_clean/wi-huc-10.shp")
+huc12_simp %>% write_sf("shp_clean/wi-huc-12.shp")
+
+
+## Export shapes ----
+
+counties_simp %>% saveRDS("../Dashboard/data/shp/counties")
+nkes_simp %>% saveRDS("../Dashboard/data/shp/nkes")
+huc8_simp %>% saveRDS("../Dashboard/data/shp/huc8")
+huc10_simp %>% saveRDS("../Dashboard/data/shp/huc10")
+huc12_simp %>% saveRDS("../Dashboard/data/shp/huc12")
+
+
+# Load station list -----------------------------------------------------------
 
 stn_list <- "stations/SWIMS Station Export v2022-12-22.csv" %>%
   read_csv(col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
@@ -214,8 +261,9 @@ baseline_final <- baseline_data %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date)
 
+# export
 baseline_final %>% write_csv("baseline_clean/baseline-data.csv")
-# baseline_final %>% write_csv("../Dashboard/data/baseline-data.csv.gz")
+baseline_final %>% write_csv("../Dashboard/data/baseline-data.csv.gz")
 
 
 # Nutrient data -----------------------------------------------------------
@@ -244,8 +292,9 @@ tp_final <- tp_data %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date)
 
+# export
 tp_final %>% write_csv("nutrient_clean/tp-data.csv")
-# tp_final %>% write_csv("../Dashboard/data/tp-data.csv")
+tp_final %>% write_csv("../Dashboard/data/tp-data.csv.gz")
 
 
 # Thermistor data ---------------------------------------------------------
@@ -389,8 +438,11 @@ therm_inventory %>%
     hobo_sns %>%
       mutate(have_data = T)
     }) %>%
-  replace_na(list(have_data = F)) %>%
-  write_csv("Thermistors - missing data for loggers in inventory.csv")
+  replace_na(list(have_data = F)) %>% {
+    print(.)
+    write_csv(., "therm/Thermistors - missing data for loggers in inventory.csv")
+  }
+
 
 # Join the inventory
 therm_stns <- hobo_sns %>%
@@ -399,8 +451,10 @@ therm_stns <- hobo_sns %>%
 
 # Any loggers missing stations?
 therm_stns %>%
-  filter(is.na(station_id)) %>%
-  write_csv("Thermistors - missing logger stations.csv")
+  filter(is.na(station_id)) %>% {
+    print(.)
+    write_csv(., "therm/Thermistors - missing logger stations.csv")
+  }
 
 
 
@@ -425,35 +479,17 @@ hobo_data <- hobo_data_raw %>%
 hobo_data %>% filter(is.na(latitude))
 
 
-## Hobo summary ----
-
-# 2022 summary
-therm_stns %>% filter(year == 2022)
-hobo_data %>%
-  filter(year == 2022) %>%
-  group_by(station_id) %>%
-  summarise(
-    min_date = min(date),
-    max_date = max(date),
-    deploy_length = max_date - min_date) %>%
-  summarize(
-    min_date = mean(min_date),
-    max_date = mean(max_date),
-    deploy_length = mean(deploy_length)
-  )
-
-
 ## Export ----
 
 therm_inventory %>% write_csv("therm_clean/therm-info.csv")
-# therm_inventory %>% write_csv("../Dashboard/data/therm-info.csv")
+therm_inventory %>% write_csv("../Dashboard/data/therm-info.csv.gz")
 
-hobo_data %>% write_csv("therm_clean/therm-data.csv.gz")
-# hobo_data %>% write_csv("../Dashboard/data/therm-data.csv.gz")
+hobo_data %>% write_csv("therm_clean/therm-data.csv")
+hobo_data %>% write_csv("../Dashboard/data/therm-data.csv.gz")
 
 
 
-# Trim station list -------------------------------------------------------
+# Finalize station list -------------------------------------------------------
 
 ## Check baseline ----
 
@@ -482,12 +518,13 @@ tp_data %>%
 
 ## Check thermistor ----
 
+# number of thermistor stations
 therm_stns %>% count(station_id)
 
+# any thermistor inventory entries missing a station id?
 therm_stns %>%
   count(station_id) %>%
   filter(!(station_id %in% stn_list$station_id))
-
 
 
 ## Stations to keep ----
@@ -501,33 +538,33 @@ keep_stns <- unique(c(
 
 count(baseline_data, station_id, name = "baseline_obs")
 
-# create sf
+
+## Create station SF ----
+
 stn_list.sf <- stn_list %>%
   filter(station_id %in% keep_stns) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
   st_join(select(counties, DnrRegion, CountyNam)) %>%
-  st_join(select(huc8, huc8_name = Huc8Name)) %>%
-  st_join(select(huc10, huc10_name = Huc10Name)) %>%
-  st_join(select(huc12, huc12_name = Huc12Name)) %>%
+  st_join(select(huc12, -Area)) %>%
   select(
-    station_id,
-    station_name,
-    latitude,
-    longitude,
-    wbic,
-    waterbody,
+    station_id, station_name,
+    latitude, longitude,
     county_name = CountyNam,
     dnr_region = DnrRegion,
-    huc8_name,
-    huc10_name,
-    huc12_name,
+    wbic, waterbody,
+    huc12 = Huc12Code,
+    sub_watershed = Huc12Name,
+    huc10 = Huc10Code,
+    watershed = Huc10Name,
+    huc8 = Huc8Code,
+    sub_basin = Huc8Name,
+    major_basin = MajorBasin,
     geometry
   ) %>%
-  # st_join(nke_data) %>%
   distinct(station_id, .keep_all = T)
 
 # Plot stations
-all_stns.sf %>%
+stn_list.sf %>%
   mutate(label = paste0("[", station_id, "] ", station_name)) %>%
   leaflet() %>%
   addTiles() %>%
@@ -538,7 +575,7 @@ all_stns.sf %>%
     label = ~label,
     clusterOptions = markerClusterOptions())
 
-all_stns <- all_stns.sf %>%
+all_stns <- stn_list.sf %>%
   st_set_geometry(NULL)
 
 baseline_stns <- all_stns %>%
@@ -548,7 +585,9 @@ tp_stns <- all_stns %>%
   filter(station_id %in% tp_data$station_id)
 
 all_stns %>% write_csv("stations_clean/station-list.csv")
-# all_stns %>% write_csv("../Dashboard/data/station-list.csv")
+all_stns %>% write_csv("../Dashboard/data/station-list.csv.gz")
+
+
 
 
 # Misc/Test --------------------------------------------------------------------
