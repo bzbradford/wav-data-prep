@@ -136,7 +136,7 @@ huc12_simp %>% saveRDS("../Dashboard/data/shp/huc12")
 
 # Load station list -----------------------------------------------------------
 
-stn_list <- "stations/SWIMS Station Export v2022-12-22.csv" %>%
+stn_list <- "stations/SWIMS Station Export v20230627.csv" %>%
   read_csv(col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
   clean_names() %>%
   select(
@@ -155,12 +155,9 @@ stn_list <- "stations/SWIMS Station Export v2022-12-22.csv" %>%
 
 # Baseline data -----------------------------------------------------------
 
-baseline_files <- file.path(
-  "baseline",
-  list(
-    "2019-2021 Baseline Data.csv",
-    "2022 Baseline Data v2022-12-22.csv"
-  )
+baseline_files <- c(
+  "baseline/2019-2021 Baseline Data.csv",
+  "baseline/2022 Baseline Data v20230627.csv"
 )
 
 baseline_obs <- baseline_files %>%
@@ -207,14 +204,11 @@ add_units <- function(.data, col, units) {
 }
 
 # Stream flow data
-flow_files <- file.path(
-  "baseline",
-  list(
-    "2019 Flow Data.csv",
-    "2020 Flow Data.csv",
-    "2021 Flow Data.csv",
-    "2022 Flow Data v2022-12-22.csv"
-  )
+flow_files <- c(
+  "baseline/2019 Flow Data.csv",
+  "baseline/2020 Flow Data.csv",
+  "baseline/2021 Flow Data.csv",
+  "baseline/2022 Flow Data v20230627.csv"
 )
 
 flow_obs <- flow_files %>%

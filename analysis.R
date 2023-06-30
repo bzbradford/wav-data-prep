@@ -526,7 +526,6 @@ stn_list.sf %>%
   )
 
 
-
 ## 2022 Sites Map ----
 
 library(leaflet)
@@ -655,3 +654,122 @@ hobo_data %>%
     max_date = mean(max_date),
     deploy_length = mean(deploy_length)
   )
+
+
+
+
+# Data summaries ----------------------------------------------------------
+
+# summarize a list of stations
+summarize_stns <- function(stns = all_stns$station_id) {
+  all_stns %>%
+    filter(station_id %in% stns) %>%
+    summarize(
+      stns = n(),
+      counties = sprintf(
+        "%s/72 (%.1f%%)",
+        n_distinct(county_name),
+        100 * n_distinct(county_name) / 72
+      ),
+      huc8_subbasin = sprintf(
+        "%s/%s (%.1f%%)",
+        n_distinct(huc8),
+        nrow(huc8_attr),
+        100 * n_distinct(huc8) / nrow(huc8_attr)
+      ),
+      huc10_watershed = sprintf(
+        "%s/%s (%.1f%%)",
+        n_distinct(huc10),
+        nrow(huc10_attr),
+        100 * n_distinct(huc10) / nrow(huc10_attr)
+      ),
+      huc12_subwatershed = sprintf(
+        "%s/%s (%.1f%%)",
+        n_distinct(huc12),
+        nrow(huc12_attr),
+        100 * n_distinct(huc12) / nrow(huc12_attr)
+      )
+    )
+}
+summarize_stns()
+
+# generate baseline summary
+summarize_baseline <- function() {
+  by_year <- baseline_data %>%
+    mutate(year = as.character(year)) %>%
+    group_by(year) %>%
+    summarize(
+      fieldwork_events = n(),
+      distinct_user_groups = n_distinct(group_desc),
+      stns = summarize_stns(unique(station_id))
+    )
+
+  all_years <- baseline_data %>%
+    mutate(year = "All years") %>%
+    group_by(year) %>%
+    summarize(
+      fieldwork_events = n(),
+      distinct_user_groups = n_distinct(group_desc),
+      stns = summarize_stns(unique(station_id))
+    )
+
+  bind_rows(by_year, all_years) %>%
+    mutate(type = "baseline", .before = everything()) %>%
+    unnest(stns)
+}
+summarize_baseline()
+
+
+# generate total phosphorus summary
+summarize_tp <- function() {
+  by_year <- tp_data %>%
+    mutate(year = as.character(year)) %>%
+    group_by(year) %>%
+    summarize(
+      fieldwork_events = n(),
+      distinct_user_groups = n_distinct(volunteer_name),
+      stns = summarize_stns(unique(station_id))
+    )
+
+  all_years <- tp_data %>%
+    mutate(year = "All years") %>%
+    group_by(year) %>%
+    summarize(
+      fieldwork_events = n(),
+      distinct_user_groups = n_distinct(volunteer_name),
+      stns = summarize_stns(unique(station_id))
+    )
+
+  bind_rows(by_year, all_years) %>%
+    mutate(type = "total phosphorus", .before = everything()) %>%
+    unnest(stns)
+}
+summarize_tp()
+
+
+# generate thermistor summary
+summarize_thermistor <- function() {
+  by_year <- hobo_data %>%
+    mutate(year = as.character(year)) %>%
+    group_by(year) %>%
+    summarize(stns = summarize_stns(unique(station_id)))
+
+  all_years <- hobo_data %>%
+    mutate(year = "All years") %>%
+    group_by(year) %>%
+    summarize(stns = summarize_stns(unique(station_id)))
+
+  bind_rows(by_year, all_years) %>%
+    mutate(type = "thermistor", .before = everything()) %>%
+    unnest(stns)
+}
+summarize_thermistor()
+
+
+## summary info about each dataset ----
+bind_rows(
+  summarize_baseline(),
+  summarize_tp(),
+  summarize_thermistor()
+) %>%
+  write_csv("WAV data summary.csv")
