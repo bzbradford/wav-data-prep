@@ -22,10 +22,13 @@ counties <- read_sf("shp/wi-counties.shp") %>%
     ShapeArea = Shapearea
   )
 
-npts(counties)
-ggplot(counties) + geom_sf()
-
+# npts(counties)
+# counties_simp <- st_simplify(counties, preserveTopology = T, dTolerance = 100)
 counties_simp <- ms_simplify(counties, 0.5)
+# leaflet() %>%
+#   addPolylines(data = counties, color = "black", weight = 2) %>%
+#   addPolylines(data = counties_simp, color = "red", weight = 1)
+# npts(counties_simp)
 counties_simp %>% write_sf("shp_clean/wi-counties.shp")
 
 
@@ -151,89 +154,105 @@ stn_list <- "stations/SWIMS Station Export v20230627.csv" %>%
   arrange(station_id) %>%
   drop_na(station_id, latitude, longitude)
 
-
-
-# Baseline data -----------------------------------------------------------
-
-baseline_files <- c(
-  "baseline/2019-2021 Baseline Data.csv",
-  "baseline/2022 Baseline Data v20230627.csv"
-)
-
-baseline_obs <- baseline_files %>%
-  lapply(read_csv, col_types = list(.default = "c", STATION_ID = "d")) %>%
-  bind_rows() %>%
+stn_list <-  read_csv("stations/WAV Stations v20230824.csv", col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
   clean_names() %>%
   select(
     station_id,
-    # station_name = primary_station_name,
-    station_type_code,
-    # secondary_station_type,
+    station_name = primary_station_name,
+    wbic,
+    waterbody = official_waterbody_name,
+    latitude,
+    longitude) %>%
+  mutate(station_name = str_squish(str_replace_all(station_name, "[^[:alnum:][:punct:] ]", ""))) %>%
+  distinct(station_id, .keep_all = T) %>%
+  arrange(station_id) %>%
+  drop_na(station_id, latitude, longitude)
+
+# Baseline data -----------------------------------------------------------
+
+## Baseline observations ----
+
+baseline_in <- read_csv(
+  "baseline/Baseline 2015-2023 v20231010.csv",
+  col_types = list(.default = "c")) %>%
+  clean_names()
+
+names(baseline_in)
+
+baseline_obs <- baseline_in %>%
+  select(
     fieldwork_seq_no,
-    group_desc,
-    date = start_date,
-    # sample_header_seq_no,
-    # dyn_form_code,
-    weather_conditions,
-    # sampling_date,
-    weather_over_past_2_days,
-    current_stream_condition,
-    ambient_air_temp = ambient_air_temp_field,
+    datetime = start_datetime,
+    station_id,
+    station_type_code,
+    ambient_air_temp,
     ambient_air_temp_units,
-    water_temperature,
-    water_temperature_units,
-    d_o_sampling_method,
-    d_o,
-    d_o_percent_saturation,
-    p_h,
+    water_temp,
+    water_temp_units,
+    d_o = do_mg,
+    d_o_percent_saturation = do_pct,
+    ph,
     transparency_tube_length,
-    # transparency_trial_1,
-    # transparency_trial_2,
-    transparency_average,
-    specific_conductance,
-    # chloride_sample_collected,
-    # point_outfall_number_chloride,
-    # tp_sample_collected,
-    # point_outfall_number_tp,
+    transparency_average = transparency_avg,
+    specific_cond,
+    weather_conditions,
+    weather_last_2_days,
+    current_stream_condition,
     additional_comments,
-    fieldwork_comment) %>%
+    fieldwork_comment
+  ) %>%
+  mutate(
+    across(c(ambient_air_temp, water_temp, d_o, d_o_percent_saturation, ph, transparency_tube_length, transparency_average, specific_cond), as.numeric),
+    across(c(weather_last_2_days, additional_comments, fieldwork_comment), ~ str_to_sentence(str_squish(.x))),
+    across(c(fieldwork_seq_no, station_id), as.integer),
+    across(datetime, ~ parse_datetime(.x, "%Y-%m-%d %h:%M %p"))
+  ) %>%
+  mutate(date = as.Date(datetime), .after = datetime) %>%
+  arrange(datetime) %>%
+  filter(datetime >= "2015-1-1") %>%
   distinct(station_id, date, .keep_all = T)
+
+
+## Baseline flow ----
+
+flow_in <- read_csv("baseline/Streamflow 2015-2023 v20231010.csv", col_types = list(.default = "c")) %>%
+  clean_names()
+
+names(flow_in)
+
+flow_obs <- flow_in %>%
+  select(
+    fieldwork_seq_no,
+    datetime = start_datetime,
+    station_id,
+    stream_width,
+    average_stream_depth,
+    average_surface_velocity,
+    entered_streamflow = stream_flow_cfs,
+    calculated_streamflow = calculated_streamflow_cfs,
+    corrected_streamflow = calculated_corrected_streamflow_cfs,
+    flow_method_used
+  ) %>%
+  mutate(
+    across(datetime, ~ parse_datetime(.x, "%Y-%m-%d %h:%M %p")),
+    across(c(fieldwork_seq_no, station_id), as.integer),
+    across(stream_width:corrected_streamflow, as.numeric),
+  ) %>%
+  mutate(date = as.Date(datetime), .after = datetime) %>%
+  mutate(streamflow_cfs = coalesce(entered_streamflow, corrected_streamflow, calculated_streamflow), .before = entered_streamflow) %>%
+  replace_na(list(flow_method_used = "Not Specified")) %>%
+  distinct(station_id, date, .keep_all = T)
+
+
+## Join baseline obs + flow ----
 
 add_units <- function(.data, col, units) {
   mutate(.data, "{col}_units" := case_when(is.na(.data[[col]]) ~ "", T ~ units), .after = {{col}})
 }
 
-# Stream flow data
-flow_files <- c(
-  "baseline/2019 Flow Data.csv",
-  "baseline/2020 Flow Data.csv",
-  "baseline/2021 Flow Data.csv",
-  "baseline/2022 Flow Data v20230627.csv"
-)
-
-flow_obs <- flow_files %>%
-  lapply(read_csv, col_types = list(.default = "c", STATION_ID = "d")) %>%
-  bind_rows() %>%
-  clean_names() %>%
-  mutate(stream_flow_cfs = case_when(
-    !is.na(stream_flow_cfs) ~ stream_flow_cfs,
-    T ~ corrected_streamflow
-  )) %>%
-  select(
-    station_id,
-    date = start_date,
-    stream_width,
-    average_stream_depth,
-    average_surface_velocity,
-    stream_flow_cfs,
-    flow_method_used) %>%
-  replace_na(list(flow_method_used = "Not Specified")) %>%
-  distinct(station_id, date, .keep_all = T)
-
 baseline_data <- baseline_obs %>%
   left_join(flow_obs) %>%
   mutate(
-    date = parse_date(date, "%m/%d/%Y"),
     year = year(date),
     month = month(date),
     day = day(date),
@@ -247,17 +266,21 @@ baseline_data <- baseline_obs %>%
   add_units("average_surface_velocity", "ft/s") %>%
   relocate(contains("_comment"), .after = everything()) %>%
   rename(stream_flow_comments = additional_comments) %>%
-  type_convert() %>%
   arrange(year, station_id, date)
 
 baseline_final <- baseline_data %>%
   left_join(stn_list) %>%
-  relocate(station_name, .after = station_id) %>%
+  relocate(station_name:longitude, .after = station_id) %>%
   arrange(station_id, date)
 
 # export
 baseline_final %>% write_csv("baseline_clean/baseline-data.csv")
-baseline_final %>% write_csv("../Dashboard/data/baseline-data.csv.gz")
+baseline_final %>%
+  write_csv("../WAV Dashboard/data/baseline-data.csv.gz")
+
+baseline_final %>%
+  filter(year == 2023, station_id == 10010967) %>%
+  view()
 
 
 # Nutrient data -----------------------------------------------------------
@@ -295,6 +318,7 @@ tp_final %>% write_csv("../Dashboard/data/tp-data.csv.gz")
 
 parse_hobos <- function(dir, year) {
   require(tidyverse)
+  require(lubridate)
   require(janitor)
   require(tools)
 
@@ -309,14 +333,14 @@ parse_hobos <- function(dir, year) {
   temp_check <- function(temp, unit) {
     ifelse(
       unit == "F",
-      (temp > 20) & (temp < 100),
-      (temp > -5) & (temp < 40)
+      (temp > 0) & (temp < 100),
+      (temp > -40) & (temp < 40)
     )
   }
 
   warn <- function(sn, msg) {
     message(" => ", msg)
-    warning("SN ", sn, ": ", msg, call. = F)
+    # warning("SN ", sn, ": ", msg, call. = F)
   }
 
   files <- list.files(dir, "*.csv", full.names = T)
@@ -332,66 +356,71 @@ parse_hobos <- function(dir, year) {
 
     # check file name and get logger SN
     if (file_ext(file) != "csv") stop("File '", file, "' is not a csv!")
+    message("\nReading ", basename(file), "...")
     sn <- gsub(".csv", "", basename(file))
 
-    # try to process data
-    tryCatch({
-      first_line <- readLines(file, n = 1)
-      skip <- 0
+    first_line <- readLines(file, n = 1)
+    skip <- 0
 
-      if (grepl("Plot", first_line)) skip <- 1
+    if (grepl("Plot", first_line)) skip <- 1
 
-      import <- read_csv(file, skip = skip, show_col_types = F, col_select = 1:3)
-      message(paste0("\nSN: ", sn))
+    import <- read_csv(file, skip = skip, col_select = 1:3, col_types = "ccc")
+    message(paste0("SN: ", sn))
 
-      if (grepl("(*F)", names(import)[3])) {
-        unit <- "F"
-      } else if (grepl("(*C)", names(import)[3])) {
-        unit <- "C"
-      } else {
-        stop("FATAL: Unable to determine temperature units! Require (°F) or (°C) in temperature column name!")
-      }
+    if (grepl("(*F)", names(import)[3], useBytes = T)) {
+      unit <- "F"
+    } else if (grepl("(*C)", names(import)[3], useBytes = T)) {
+      unit <- "C"
+    } else {
+      stop("FATAL: Unable to determine temperature units! Require (°F) or (°C) in temperature column name!")
+    }
 
-      data <- import %>%
-        select(DateTime = 2, Temp = 3) %>%
-        mutate(Temp = round(Temp, 2)) %>%
-        mutate(Unit = unit) %>%
-        drop_na() %>%
-        mutate(LoggerSN = as.numeric(sn), .before = 1) %>%
-        mutate(DateTime = lubridate::parse_date_time(DateTime, c("mdy HMS p", "mdy HMS", "ymd HMS"))) %>%
-        mutate(Date = as.Date(DateTime), .before = DateTime) %>%
-        mutate(TempOK = temp_check(Temp, Unit))
+    data <- import %>%
+      select(DateTime = 2, Temp = 3) %>%
+      mutate(Temp = round(as.numeric(Temp), 2)) %>%
+      drop_na(Temp) %>%
+      mutate(Unit = unit) %>%
+      mutate(LoggerSN = as.numeric(sn), .before = 1) %>%
+      mutate(DateTime = parse_date_time(DateTime, c(
+        "%m/%d/%y %H:%M:%S",
+        "%m/%d/%y %H:%M:%S %p",
+        "%Y-%m-%d %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y %H:%M:%S",
+        "%m-%d-%y %H:%M:%S"
+      ), exact = T)) %>%
+      mutate(Date = as.Date(DateTime), Year = lubridate::year(Date), .after = DateTime) %>%
+      mutate(TempOK = temp_check(Temp, Unit))
 
-      cat(paste0(
-        " => ", nrow(data), " obs\n",
-        " => ", as.Date(min(data$Date)), " - ", as.Date(max(data$Date)), "\n",
-        " => ", min(data$Temp), " - ", max(data$Temp), " °", unit, "\n"))
+    print(data)
 
-      if (lubridate::year(min(data$Date)) != lubridate::year(max(data$Date))) {
-        warn(sn, "Multiple years in data range!")
-      }
+    cat(paste0(
+      " => ", nrow(data), " obs\n",
+      " => ", as.Date(min(data$Date)), " - ", as.Date(max(data$Date)), "\n",
+      " => ", min(data$Temp), " - ", max(data$Temp), " °", unit, "\n"))
 
-      if (!all(data$TempOK)) {
-        before <- nrow(data)
-        data <- filter(data, TempOK)
-        after <- nrow(data)
-        warn(sn, paste0("Removed ", before - after, " temperature value(s) out of range!"))
-      }
+    if (length(unique(data$Year)) > 1) {
+      warn(sn, paste0("Multiple years in data range: ", paste(sort(unique(data$Year)), collapse = ", ")))
+    }
 
-      data %>%
-        mutate(
-          TempF = ifelse(Unit == "F", Temp, round(c_to_f(Temp), 2)),
-          TempC = ifelse(Unit == "C", Temp, round(f_to_c(Temp), 2))) %>%
-        select(-c("Temp", "Unit", "TempOK"))
-    },
-      error = function(e) {
-        warn(sn, "FATAL: Failed to parse data: ", e, "\n")
-      }
-    )
+    if (!all(data$TempOK)) {
+      before <- nrow(data)
+      bad_temps <- filter(data, !TempOK)
+      data <- filter(data, TempOK)
+      after <- nrow(data)
+      warn(sn, paste0("Removed ", before - after, " temperature value(s) out of range!"))
+      print(bad_temps)
+    }
+
+    data %>%
+      mutate(
+        TempF = ifelse(Unit == "F", Temp, round(c_to_f(Temp), 2)),
+        TempC = ifelse(Unit == "C", Temp, round(f_to_c(Temp), 2))) %>%
+      select(-c("Temp", "Unit", "TempOK"))
   })
 
   bind_rows(raw_data) %>%
-    mutate(Year = year, .before = Date) %>%
+    # mutate(Year = year, .before = Date) %>%
     clean_names()
 }
 
@@ -413,8 +442,15 @@ hobo_data_raw <- bind_rows(
   hobos_2020,
   hobos_2021,
   hobos_2022
-)
+) %>%
+  arrange(logger_sn, date_time) %>%
+  distinct(logger_sn, date_time, .keep_all = T) %>%
+  filter(year >= 2020)
 
+# loggers per year
+hobo_data_raw %>%
+  count(logger_sn, year) %>%
+  count(year)
 
 ## Hobo checks ----
 
@@ -462,7 +498,7 @@ hobo_data <- hobo_data_raw %>%
     before_removed = ifelse(is.na(date_removed), TRUE, date_time < date_removed)
   ) %>%
   filter(after_deploy & before_removed) %>%
-  select(year:temp_c, logger_sn, device_type, station_id, station_name, latitude, longitude) %>%
+  select(date_time:temp_c, logger_sn, device_type, station_id, station_name, latitude, longitude) %>%
   filter(year == lubridate::year(date)) %>%
   mutate(
     month = lubridate::month(date),
@@ -479,7 +515,7 @@ therm_inventory %>% write_csv("therm_clean/therm-info.csv")
 therm_inventory %>% write_csv("../Dashboard/data/therm-info.csv.gz")
 
 hobo_data %>% write_csv("therm_clean/therm-data.csv")
-hobo_data %>% write_csv("../Dashboard/data/therm-data.csv.gz")
+hobo_data %>% write_csv("../WAV Dashboard/data/therm-data.csv.gz")
 
 
 
@@ -579,7 +615,7 @@ tp_stns <- all_stns %>%
   filter(station_id %in% tp_data$station_id)
 
 all_stns %>% write_csv("stations_clean/station-list.csv")
-all_stns %>% write_csv("../Dashboard/data/station-list.csv.gz")
+all_stns %>% write_csv("../WAV Dashboard/data/station-list.csv.gz")
 
 
 
