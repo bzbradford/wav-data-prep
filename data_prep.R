@@ -81,6 +81,14 @@ huc8 <- read_sf("shp/wi-huc-8.shp") %>%
     geometry
   )
 
+# load DNR's watershed shapefile to get watershed ID numbers
+dnr_ws_colnames <- read_csv("shp/wi-dnr-watersheds-colnames.csv")$colname
+dnr_watersheds <- read_sf("shp/wi-dnr-watersheds.shp") %>%
+  select(-OBJECTID) %>%
+  st_transform(crs = 4326) %>%
+  setNames(c(dnr_ws_colnames, "geometry")) %>%
+  janitor::clean_names(case = "big_camel")
+
 # load huc10 watersheds and join huc8 info
 huc10 <- read_sf("shp/wi-huc-10.shp") %>%
   clean_names(case = "big_camel") %>%
@@ -92,6 +100,10 @@ huc10 <- read_sf("shp/wi-huc-10.shp") %>%
     Area = ShapeAre,
     geometry
   )
+
+leaflet() %>%
+  addPolygons(data = huc10, color = "red", fillColor = "red") %>%
+  addPolygons(data = dnr_watersheds, label = ~WSHED_NAME)
 
 # load huc12 watersheds and join huc10 info
 huc12 <- read_sf("shp/wi-huc-12.shp") %>%
@@ -121,20 +133,22 @@ ggplot(huc12) + geom_sf()
 huc8_simp <- ms_simplify(huc8, 0.5)
 huc10_simp <- ms_simplify(huc10, 0.5)
 huc12_simp <- ms_simplify(huc12, 0.5)
+# dnr_ws_simp <- ms_simplify(dnr_watersheds, .5)
 
 # save locally
 huc8_simp %>% write_sf("shp_clean/wi-huc-8.shp")
 huc10_simp %>% write_sf("shp_clean/wi-huc-10.shp")
 huc12_simp %>% write_sf("shp_clean/wi-huc-12.shp")
-
+# dnr_ws_simp %>% write_sf("shp_clean/wi-dnr-watersheds.shp")
 
 ## Export shapes ----
 
-counties_simp %>% saveRDS("../Dashboard/data/shp/counties")
-nkes_simp %>% saveRDS("../Dashboard/data/shp/nkes")
-huc8_simp %>% saveRDS("../Dashboard/data/shp/huc8")
-huc10_simp %>% saveRDS("../Dashboard/data/shp/huc10")
-huc12_simp %>% saveRDS("../Dashboard/data/shp/huc12")
+counties_simp %>% saveRDS("../WAV Dashboard/data/shp/counties")
+nkes_simp %>% saveRDS("../WAV Dashboard/data/shp/nkes")
+huc8_simp %>% saveRDS("../WAV Dashboard/data/shp/huc8")
+huc10_simp %>% saveRDS("../WAV Dashboard/data/shp/huc10")
+huc12_simp %>% saveRDS("../WAV Dashboard/data/shp/huc12")
+# dnr_ws_simp %>% saveRDS("../WAV Dashboard/data/shp/dnr_ws")
 
 
 # Load station list -----------------------------------------------------------
@@ -268,10 +282,32 @@ baseline_data <- baseline_obs %>%
   rename(stream_flow_comments = additional_comments) %>%
   arrange(year, station_id, date)
 
+
+## Determine which fieldwork events are missing all of the key baseline parameters ----
+key_baseline_vars <- c(
+  "ambient_air_temp",
+  "water_temp",
+  "d_o",
+  "transparency_average",
+  "streamflow_cfs"
+)
+
+has_key_baseline_data <- baseline_data %>%
+  select(fieldwork_seq_no, all_of(key_baseline_vars)) %>%
+  pivot_longer(2:last_col()) %>%
+  summarize(valid = sum(!is.na(value)) > 0, .by = fieldwork_seq_no)
+valid_fieldwork_seq_no <- has_key_baseline_data %>%
+  filter(valid) %>%
+  pull(fieldwork_seq_no)
+message(nrow(baseline_data) - length(valid_fieldwork_seq_no), " fieldwork events dropped due to having no key baseline data")
+
+
+## Final baseline join and filter ----
 baseline_final <- baseline_data %>%
   left_join(stn_list) %>%
   relocate(station_name:longitude, .after = station_id) %>%
-  arrange(station_id, date)
+  arrange(station_id, date) %>%
+  filter(fieldwork_seq_no %in% valid_fieldwork_seq_no)
 
 # export
 baseline_final %>% write_csv("baseline_clean/baseline-data.csv")
@@ -576,6 +612,7 @@ stn_list.sf <- stn_list %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
   st_join(select(counties, DnrRegion, CountyNam)) %>%
   st_join(select(huc12, -Area)) %>%
+  st_join(select(dnr_watersheds, WatershedName, WatershedCode)) %>%
   select(
     station_id, station_name,
     latitude, longitude,
@@ -586,12 +623,19 @@ stn_list.sf <- stn_list %>%
     sub_watershed = Huc12Name,
     huc10 = Huc10Code,
     watershed = Huc10Name,
+    dnr_watershed_name = WatershedName,
+    dnr_watershed_code = WatershedCode,
     huc8 = Huc8Code,
     sub_basin = Huc8Name,
     major_basin = MajorBasin,
     geometry
   ) %>%
   distinct(station_id, .keep_all = T)
+
+# dnr_watershed_join <- stn_list.sf %>%
+#   select(station_id) %>%
+#   st_join(dnr_watersheds) %>%
+#   st_set_geometry(NULL)
 
 # Plot stations
 stn_list.sf %>%
@@ -616,8 +660,6 @@ tp_stns <- all_stns %>%
 
 all_stns %>% write_csv("stations_clean/station-list.csv")
 all_stns %>% write_csv("../WAV Dashboard/data/station-list.csv.gz")
-
-
 
 
 # Misc/Test --------------------------------------------------------------------

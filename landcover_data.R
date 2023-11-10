@@ -2,7 +2,8 @@
 
 library(tidyverse)
 library(sf)
-library(raster)
+library(terra)
+library(tidyterra)
 library(exactextractr)
 library(plotly)
 
@@ -25,12 +26,8 @@ extractfn <- function(df) {
 # load NLCD ----
 
 # WI NLCD
-nlcd <- raster("D:/GIS/raster/NLCD_WI/wi_nlcd_raw.tif")
-crs(nlcd)
-plot(nlcd)
-
-# CONUS NLCD
-nlcd <- raster("D:/GIS/raster/NLCD_2016_Land_Cover_L48_20190424/NLCD_2016_Land_Cover_L48_20190424.img")
+nlcd <- rast("D:/GIS/raster/nlcd_2021_land_cover_l48_20230630/nlcd_2021_land_cover.tif")
+st_crs(nlcd)
 plot(nlcd)
 
 
@@ -47,7 +44,7 @@ huc8_ls <- huc8 %>%
   exact_extract(
     x = nlcd,
     y = .,
-    include_cols = "huc_code",
+    include_cols = "huc",
     coverage_area = T,
     summarize_df = T,
     fun = extractfn
@@ -66,7 +63,7 @@ huc10_ls <- huc10 %>%
   exact_extract(
     x = nlcd,
     y = .,
-    include_cols = "huc_code",
+    include_cols = "huc",
     coverage_area = T,
     summarize_df = T,
     fun = extractfn
@@ -86,7 +83,7 @@ huc12_ls <- huc12 %>%
   exact_extract(
     x = nlcd,
     y = .,
-    include_cols = "huc_code",
+    include_cols = "huc",
     coverage_area = T,
     summarize_df = T,
     fun = extractfn
@@ -110,8 +107,8 @@ landscape_data <- bind_rows(
 # Export/Import ----
 
 landscape_data %>% write_csv("land/landcover.csv.gz")
-landscape_data %>% write_csv("../Dashboard/data/landcover.csv.gz")
-nlcd_classes %>% write_csv("../Dashboard/data/nlcd_classes.csv")
+landscape_data %>% write_csv("../WAV Dashboard/data/landcover.csv.gz")
+nlcd_classes %>% write_csv("../WAV Dashboard/data/nlcd_classes.csv")
 
 # landscape_data <- read_csv("land/landcover.csv.gz")
 
@@ -161,14 +158,31 @@ landscape_data %>%
     n = n()) %>%
   mutate(sq_km = mean_area / 1e6, sq_mi = sq_km * 0.3861)
 
+nlcd_classes
 
-df <- landscape_data %>%
-  filter(pct_area > 0) %>%
-  filter(huc == sample(.$huc)) %>%
+test_landscape <- landscape_data %>%
+  left_join(nlcd_classes, "class") %>%
+  filter(huc_level == 10) %>%
+  filter(huc == sample(.$huc, 1)) %>%
   arrange(desc(pct_area)) %>%
   droplevels()
 
-df %>%
+test_landscape <- landscape_data %>%
+  left_join(nlcd_classes, "class") %>%
+  filter(huc_level == 12) %>%
+  filter(huc == "070900020803") %>%
+  arrange(desc(pct_area)) %>%
+  droplevels()
+
+test_landscape_all <- landscape_data %>%
+  left_join(nlcd_classes) %>%
+  filter(huc_level == 12) %>%
+  summarize(across(pct_area, mean), .by = class_name:hex) %>%
+  arrange(desc(pct_area)) %>%
+  droplevels()
+
+# pie chart
+test_landscape_all %>%
   plot_ly() %>%
   add_trace(
     type = "pie",
@@ -188,3 +202,76 @@ df %>%
     margin = list(l = 0, r = 0),
     paper_bgcolor = "rgba(0, 0, 0, 0)"
   )
+
+
+# difference bars
+test_landscape_diff <- test_landscape_all %>%
+  left_join(select(test_landscape, class_name, pct_area2 = pct_area), by = "class_name") %>%
+  replace_na(list(pct_area2 = 0)) %>%
+  mutate(diff = pct_area2 - pct_area) %>%
+  mutate(label = scales::percent(diff, .1)) %>%
+  mutate(label = if_else(substr(label, 1, 1) == "-", label, paste0("+", label))) %>%
+  mutate(label_pos = -1 * sign(diff) * .00001) %>%
+  mutate(hovertext = paste0(
+    "Current watershed: ",
+    scales::percent(pct_area2, .1),
+    "<br>State average: ",
+    scales::percent(pct_area, .1),
+    "<br>Difference: ",
+    label))
+
+test_landscape_diff %>%
+  plot_ly() %>%
+  add_bars(
+    y = ~class_name,
+    x = ~label_pos,
+    marker = list(
+      opacity = 0
+    ),
+    text = ~class_name,
+    textposition = "outside",
+    texttemplate = "<b>%{text}</b>",
+    hoverinfo = "none"
+  ) %>%
+  add_bars(
+    y = ~class_name,
+    x = ~diff,
+    text = ~label,
+    marker = list(
+      opacity = 0
+    ),
+    textposition = "outside",
+    texttemplate = "<b>%{text}</b>"
+  ) %>%
+  add_bars(
+    y = ~class_name,
+    x = ~diff,
+    text = ~hovertext,
+    marker = list(
+      color = ~hex,
+      line = list(color = "#000", width = 1)
+    ),
+    textposition = "none",
+    hovertemplate = "<b>%{y}<br></b>%{text}<extra></extra>"
+  ) %>%
+  layout(
+    barmode = "overlay",
+    xaxis = list(
+      title = "Difference from state average",
+      tickformat = ",.0%",
+      fixedrange = T,
+      range = with(test_landscape_diff, c(min(diff) * 1.25, max(diff) * 1.25)),
+      zerolinewidth = 2
+    ),
+    yaxis = list(
+      visible = F,
+      fixedrange = T
+    ),
+    showlegend = F,
+    margin = list(l = 10, r = 10),
+    paper_bgcolor = "rgba(0, 0, 0, 0)"
+  ) %>%
+  config(displayModeBar = F)
+
+plotly::schema()
+
