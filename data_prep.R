@@ -141,6 +141,11 @@ huc10_simp %>% write_sf("shp_clean/wi-huc-10.shp")
 huc12_simp %>% write_sf("shp_clean/wi-huc-12.shp")
 # dnr_ws_simp %>% write_sf("shp_clean/wi-dnr-watersheds.shp")
 
+
+# waterbodies
+wi_waterbodies <- read_sf("shp/wi-major-lakes.shp")
+
+
 ## Export shapes ----
 
 counties_simp %>% saveRDS("../WAV Dashboard/data/shp/counties")
@@ -149,6 +154,7 @@ huc8_simp %>% saveRDS("../WAV Dashboard/data/shp/huc8")
 huc10_simp %>% saveRDS("../WAV Dashboard/data/shp/huc10")
 huc12_simp %>% saveRDS("../WAV Dashboard/data/shp/huc12")
 # dnr_ws_simp %>% saveRDS("../WAV Dashboard/data/shp/dnr_ws")
+wi_waterbodies %>% saveRDS("../WAV Dashboard/data/shp/waterbodies")
 
 
 # Load station list -----------------------------------------------------------
@@ -199,25 +205,27 @@ baseline_obs <- baseline_in %>%
     datetime = start_datetime,
     station_id,
     station_type_code,
-    ambient_air_temp,
-    ambient_air_temp_units,
+    air_temp = ambient_air_temp,
+    air_temp_units = ambient_air_temp_units,
     water_temp,
     water_temp_units,
     d_o = do_mg,
     d_o_percent_saturation = do_pct,
     ph,
-    transparency_tube_length,
-    transparency_average = transparency_avg,
     specific_cond,
+    transparency = transparency_avg,
+    transparency_tube_length,
     weather_conditions,
     weather_last_2_days,
     current_stream_condition,
+    group_desc,
     additional_comments,
     fieldwork_comment
   ) %>%
   mutate(
-    across(c(ambient_air_temp, water_temp, d_o, d_o_percent_saturation, ph, transparency_tube_length, transparency_average, specific_cond), as.numeric),
+    across(c(air_temp, water_temp, d_o, d_o_percent_saturation, ph, specific_cond, transparency, transparency_tube_length), as.numeric),
     across(c(weather_last_2_days, additional_comments, fieldwork_comment), ~ str_to_sentence(str_squish(.x))),
+    weather_conditions = str_to_sentence(gsub("_", " ", weather_conditions)),
     across(c(fieldwork_seq_no, station_id), as.integer),
     across(datetime, ~ parse_datetime(.x, "%Y-%m-%d %h:%M %p"))
   ) %>%
@@ -250,10 +258,10 @@ flow_obs <- flow_in %>%
   mutate(
     across(datetime, ~ parse_datetime(.x, "%Y-%m-%d %h:%M %p")),
     across(c(fieldwork_seq_no, station_id), as.integer),
-    across(stream_width:corrected_streamflow, as.numeric),
+    across(stream_width:corrected_streamflow, as.numeric)
   ) %>%
   mutate(date = as.Date(datetime), .after = datetime) %>%
-  mutate(streamflow_cfs = coalesce(entered_streamflow, corrected_streamflow, calculated_streamflow), .before = entered_streamflow) %>%
+  mutate(streamflow = coalesce(entered_streamflow, corrected_streamflow, calculated_streamflow), .before = entered_streamflow) %>%
   replace_na(list(flow_method_used = "Not Specified")) %>%
   distinct(station_id, date, .keep_all = T)
 
@@ -274,22 +282,22 @@ baseline_data <- baseline_obs %>%
     .after = date
   ) %>%
   add_units("d_o", "mg/L") %>%
-  add_units("transparency_average", "cm") %>%
+  add_units("transparency", "cm") %>%
   add_units("stream_width", "ft") %>%
   add_units("average_stream_depth", "ft") %>%
   add_units("average_surface_velocity", "ft/s") %>%
+  add_units("streamflow", "cfs") %>%
   relocate(contains("_comment"), .after = everything()) %>%
-  rename(stream_flow_comments = additional_comments) %>%
   arrange(year, station_id, date)
 
 
 ## Determine which fieldwork events are missing all of the key baseline parameters ----
 key_baseline_vars <- c(
-  "ambient_air_temp",
+  "air_temp",
   "water_temp",
   "d_o",
-  "transparency_average",
-  "streamflow_cfs"
+  "transparency",
+  "streamflow"
 )
 
 has_key_baseline_data <- baseline_data %>%
@@ -530,8 +538,8 @@ hobo_data <- hobo_data_raw %>%
   left_join(therm_stns, multiple = "all") %>%
   drop_na(station_id) %>%
   mutate(
-    after_deploy = ifelse(is.na(date_deployed), TRUE, date_time > date_deployed),
-    before_removed = ifelse(is.na(date_removed), TRUE, date_time < date_removed)
+    after_deploy = ifelse(is.na(date_deployed), TRUE, date > date_deployed),
+    before_removed = ifelse(is.na(date_removed), TRUE, date < date_removed)
   ) %>%
   filter(after_deploy & before_removed) %>%
   select(date_time:temp_c, logger_sn, device_type, station_id, station_name, latitude, longitude) %>%
@@ -548,7 +556,7 @@ hobo_data %>% filter(is.na(latitude))
 ## Export ----
 
 therm_inventory %>% write_csv("therm_clean/therm-info.csv")
-therm_inventory %>% write_csv("../Dashboard/data/therm-info.csv.gz")
+therm_inventory %>% write_csv("../WAV Dashboard/data/therm-info.csv.gz")
 
 hobo_data %>% write_csv("therm_clean/therm-data.csv")
 hobo_data %>% write_csv("../WAV Dashboard/data/therm-data.csv.gz")
