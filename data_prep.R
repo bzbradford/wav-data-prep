@@ -555,10 +555,12 @@ makeThermistorPlot <- function(df_hourly, weather = NULL) {
   require(dplyr)
   require(plotly)
 
-  title <- paste(
-    "Logger SN:", df_hourly$logger_sn[1], "|",
-    "Station ID:", df_hourly$station_id[1], "|",
-    "Year:", df_hourly$year[1])
+  title <- with(first(df_hourly), paste(
+    "Year:", year, "|",
+    "Logger SN:", logger_sn, "|",
+    "Station ID:", station_id, "|",
+    "Coords:", paste0(latitude, ", ", longitude)
+  ))
 
   # make sure daily values time is aligned to noon
   df_daily <- df_hourly %>%
@@ -572,6 +574,7 @@ makeThermistorPlot <- function(df_hourly, weather = NULL) {
   plt <- plot_ly()
 
   if (!is.null(weather)) {
+    print(weather)
     weather <- weather %>%
       mutate(date_time = as.POSIXct(paste(date, "12:00:00")))
     plt <- plt %>%
@@ -668,14 +671,16 @@ inspect_hobos <- function(hobodata, serials = sort(unique(hobodata$logger_sn))) 
 }
 
 buildAgWxURL <- function(df) {
-  start_date = min(df$date)
-  end_date = max(df$date)
   lat = df$latitude[1]
   lng = df$longitude[1]
+  start_date = min(df$date)
+  end_date = max(df$date)
+  if (any(is.na(c(lat, lng, start_date, end_date)))) return(NULL)
   glue::glue("https://agweather.cals.wisc.edu/ag_weather/weather?lat={lat}&long={lng}&start_date={start_date}&end_date={end_date}")
 }
 
 getAgWxData <- function(url) {
+  if (is.null(url)) return(NULL)
   httr::GET(url) %>%
     httr::content() %>%
     pluck("data") %>%
@@ -729,7 +734,7 @@ hobos2023.cleaned %>% write_csv(paste0("therm/data_cleaned/hobos-cleaned-2023.cs
 # can use this to confirm deployment and retrieval dates
 # update dates in the inventory file if desired, then re-run the cleaning
 inspect_hobos(hobos2020.cleaned)
-inspect_hobos(hobos2021.cleaned)
+inspect_hobos(hobos2021.cleaned, 10706443)
 inspect_hobos(hobos2022.cleaned)
 inspect_hobos(hobos2023.cleaned)
 
