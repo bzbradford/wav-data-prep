@@ -1,45 +1,70 @@
 # data prep for WAV dashboard
 
+
 library(tidyverse)
 library(janitor)
 library(lubridate)
 library(sf)
-
-
-# Shapefiles --------------------------------------------------------------
-
 library(leaflet)
+library(plotly)
 library(rmapshaper)
 library(mapview)
 
 
-## County Bounds ----
+# 1 => Load SWIMS Stations =====================================================
+
+stn_list <-  read_csv(
+  "stations/WAV Stations v20230824.csv",
+  col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
+  clean_names() %>%
+  select(
+    station_id,
+    station_name = primary_station_name,
+    wbic,
+    waterbody = official_waterbody_name,
+    latitude,
+    longitude) %>%
+  mutate(station_name = str_squish(str_replace_all(station_name, "[^[:alnum:][:punct:] ]", ""))) %>%
+  distinct(station_id, .keep_all = T) %>%
+  arrange(station_id) %>%
+  drop_na(station_id, latitude, longitude)
+
+
+
+# 2 => Load Shapefiles =========================================================
+
+## Counties ----
 
 counties <- read_sf("shp/wi-counties.shp") %>%
+  st_make_valid() %>%
+  st_transform(st_crs(4326)) %>%
   clean_names(case = "big_camel") %>%
   rename(
     ShapeLen = Shapelen,
     ShapeArea = Shapearea
   )
+counties_simp <- ms_simplify(counties, 0.5)
+counties_simp %>% write_sf("shp_clean/wi-counties.shp")
+
 
 # npts(counties)
 # counties_simp <- st_simplify(counties, preserveTopology = T, dTolerance = 100)
-counties_simp <- ms_simplify(counties, 0.5)
 # leaflet() %>%
 #   addPolylines(data = counties, color = "black", weight = 2) %>%
 #   addPolylines(data = counties_simp, color = "red", weight = 1)
 # npts(counties_simp)
-counties_simp %>% write_sf("shp_clean/wi-counties.shp")
+
 
 
 ## NKEs ----
 
 nkes <- read_sf("shp/nke-plans-2022.shp") %>%
+  st_make_valid() %>%
+  st_transform(st_crs(4326)) %>%
   clean_names(case = "big_camel") %>%
   select(-"ShapeLe1") %>%
   rename(ShapeLen = ShapeLeng) %>%
-  drop_na(PlanId) %>%
-  st_transform(4326)
+  drop_na(PlanId)
 
 nke_data <- nkes %>%
   select(
@@ -50,20 +75,21 @@ nke_data <- nkes %>%
     nke_end = EndDate) %>%
   mutate(across(where(is_character), ~str_to_sentence(str_trim(gsub("[\r\n]", "", .x)))))
 
-npts(nkes)
-ggplot(nkes) + geom_sf()
-
 # simplify
 nkes_simp <- ms_simplify(nkes, 0.5)
 nkes_simp %>% write_sf("shp_clean/nke-plans-2022.shp")
+
+# npts(nkes)
+# ggplot(nkes_simp) + geom_sf()
 
 
 ## HUCs ----
 
 # huc6 basins
 huc6 <- read_sf("shp/wi-huc-6.shp") %>%
+  st_make_valid() %>%
+  st_transform(st_crs(4326)) %>%
   clean_names(case = "big_camel") %>%
-  st_transform(crs = 4326) %>%
   select(
     MajorBasin = MajorBasi,
     geometry
@@ -71,6 +97,8 @@ huc6 <- read_sf("shp/wi-huc-6.shp") %>%
 
 # load huc8 subbasins and join huc6 info
 huc8 <- read_sf("shp/wi-huc-8.shp") %>%
+  st_make_valid() %>%
+  st_transform(st_crs(4326)) %>%
   clean_names(case = "big_camel") %>%
   select(-ShapeLen) %>%
   st_join(huc6, largest = T) %>%
@@ -81,16 +109,10 @@ huc8 <- read_sf("shp/wi-huc-8.shp") %>%
     geometry
   )
 
-# load DNR's watershed shapefile to get watershed ID numbers
-dnr_ws_colnames <- read_csv("shp/wi-dnr-watersheds-colnames.csv")$colname
-dnr_watersheds <- read_sf("shp/wi-dnr-watersheds.shp") %>%
-  select(-OBJECTID) %>%
-  st_transform(crs = 4326) %>%
-  setNames(c(dnr_ws_colnames, "geometry")) %>%
-  janitor::clean_names(case = "big_camel")
-
 # load huc10 watersheds and join huc8 info
 huc10 <- read_sf("shp/wi-huc-10.shp") %>%
+  st_make_valid() %>%
+  st_transform(st_crs(4326)) %>%
   clean_names(case = "big_camel") %>%
   st_join(select(huc8, -Area), largest = T) %>%
   select(
@@ -101,12 +123,10 @@ huc10 <- read_sf("shp/wi-huc-10.shp") %>%
     geometry
   )
 
-leaflet() %>%
-  addPolygons(data = huc10, color = "red", fillColor = "red") %>%
-  addPolygons(data = dnr_watersheds, label = ~WSHED_NAME)
-
 # load huc12 watersheds and join huc10 info
 huc12 <- read_sf("shp/wi-huc-12.shp") %>%
+  st_make_valid() %>%
+  st_transform(st_crs(4326)) %>%
   clean_names(case = "big_camel") %>%
   st_join(select(huc10, -Area), largest = T) %>%
   select(
@@ -130,19 +150,38 @@ ggplot(huc10) + geom_sf()
 ggplot(huc12) + geom_sf()
 
 # simplify shapefiles
-huc8_simp <- ms_simplify(huc8, 0.5)
-huc10_simp <- ms_simplify(huc10, 0.5)
-huc12_simp <- ms_simplify(huc12, 0.5)
-# dnr_ws_simp <- ms_simplify(dnr_watersheds, .5)
+huc8_simp <- ms_simplify(huc8, .5)
+huc10_simp <- ms_simplify(huc10, .5)
+huc12_simp <- ms_simplify(huc12, .5)
 
 # save locally
 huc8_simp %>% write_sf("shp_clean/wi-huc-8.shp")
 huc10_simp %>% write_sf("shp_clean/wi-huc-10.shp")
 huc12_simp %>% write_sf("shp_clean/wi-huc-12.shp")
-# dnr_ws_simp %>% write_sf("shp_clean/wi-dnr-watersheds.shp")
 
 
-# waterbodies
+## DNR Watersheds ----
+
+# load DNR's watershed shapefile to get watershed ID numbers
+dnr_ws_colnames <- read_csv("shp/wi-dnr-watersheds-colnames.csv")$colname
+dnr_watersheds <- read_sf("shp/wi-dnr-watersheds.shp") %>%
+  st_make_valid() %>%
+  st_transform(st_crs(4326)) %>%
+  select(-OBJECTID) %>%
+  setNames(c(dnr_ws_colnames, "geometry")) %>%
+  janitor::clean_names(case = "big_camel")
+
+dnr_ws_simp <- ms_simplify(dnr_watersheds, .5)
+dnr_ws_simp %>% write_sf("shp_clean/wi-dnr-watersheds.shp")
+
+# leaflet() %>%
+#   addPolygons(data = huc10, color = "red", fillColor = "red") %>%
+#   addPolygons(data = dnr_watersheds, label = ~WSHED_NAME)
+
+
+## Major waterbodies ----
+# Top 1000 waterbodies in the state by area, for use on the pdf reports
+
 wi_waterbodies <- read_sf("shp/wi-major-lakes.shp")
 
 
@@ -157,38 +196,8 @@ huc12_simp %>% saveRDS("../WAV Dashboard/data/shp/huc12")
 wi_waterbodies %>% saveRDS("../WAV Dashboard/data/shp/waterbodies")
 
 
-# Load station list -----------------------------------------------------------
 
-stn_list <- "stations/SWIMS Station Export v20230627.csv" %>%
-  read_csv(col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
-  clean_names() %>%
-  select(
-    station_id,
-    station_name = primary_station_name,
-    wbic,
-    waterbody = official_waterbody_name,
-    latitude,
-    longitude) %>%
-  mutate(station_name = str_squish(str_replace_all(station_name, "[^[:alnum:][:punct:] ]", ""))) %>%
-  distinct(station_id, .keep_all = T) %>%
-  arrange(station_id) %>%
-  drop_na(station_id, latitude, longitude)
-
-stn_list <-  read_csv("stations/WAV Stations v20230824.csv", col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
-  clean_names() %>%
-  select(
-    station_id,
-    station_name = primary_station_name,
-    wbic,
-    waterbody = official_waterbody_name,
-    latitude,
-    longitude) %>%
-  mutate(station_name = str_squish(str_replace_all(station_name, "[^[:alnum:][:punct:] ]", ""))) %>%
-  distinct(station_id, .keep_all = T) %>%
-  arrange(station_id) %>%
-  drop_na(station_id, latitude, longitude)
-
-# Baseline data -----------------------------------------------------------
+# 3 => Baseline data ===========================================================
 
 ## Baseline observations ----
 
@@ -233,6 +242,7 @@ baseline_obs <- baseline_in %>%
   arrange(datetime) %>%
   filter(datetime >= "2015-1-1") %>%
   distinct(station_id, date, .keep_all = T)
+# ok if NAs were introduced
 
 
 ## Baseline flow ----
@@ -264,6 +274,7 @@ flow_obs <- flow_in %>%
   mutate(streamflow = coalesce(entered_streamflow, corrected_streamflow, calculated_streamflow), .before = entered_streamflow) %>%
   replace_na(list(flow_method_used = "Not Specified")) %>%
   distinct(station_id, date, .keep_all = T)
+# ok if NAs were introduced
 
 
 ## Join baseline obs + flow ----
@@ -308,6 +319,7 @@ valid_fieldwork_seq_no <- has_key_baseline_data %>%
   filter(valid) %>%
   pull(fieldwork_seq_no)
 message(nrow(baseline_data) - length(valid_fieldwork_seq_no), " fieldwork events dropped due to having no key baseline data")
+# message says how many baseline fieldworks will be dropped due to lack of data
 
 
 ## Final baseline join and filter ----
@@ -322,12 +334,9 @@ baseline_final %>% write_csv("baseline_clean/baseline-data.csv")
 baseline_final %>%
   write_csv("../WAV Dashboard/data/baseline-data.csv.gz")
 
-baseline_final %>%
-  filter(year == 2023, station_id == 10010967) %>%
-  view()
 
 
-# Nutrient data -----------------------------------------------------------
+# 4 => Nutrient data ===========================================================
 
 tp_data <- list(
   "nutrient/tp-data-2019.csv",
@@ -355,46 +364,41 @@ tp_final <- tp_data %>%
 
 # export
 tp_final %>% write_csv("nutrient_clean/tp-data.csv")
-tp_final %>% write_csv("../Dashboard/data/tp-data.csv.gz")
+tp_final %>% write_csv("../WAV Dashboard/data/tp-data.csv.gz")
 
 
-# Thermistor data ---------------------------------------------------------
+# 5 => Thermistor data =========================================================
 
-parse_hobos <- function(dir, year) {
+parse_hobos <- function(dir, yr) {
   require(tidyverse)
   require(lubridate)
   require(janitor)
   require(tools)
 
-  c_to_f <- function(c) {
-    c * 1.8 + 32
-  }
-
-  f_to_c <- function(f) {
-    (f - 32) * 5 / 9.0
-  }
+  c_to_f <- function(c) { c * 1.8 + 32 }
+  f_to_c <- function(f) { (f - 32) * 5 / 9.0 }
 
   temp_check <- function(temp, unit) {
-    ifelse(
+    if_else(
       unit == "F",
-      (temp > 0) & (temp < 100),
-      (temp > -40) & (temp < 40)
+      (temp > 23) & (temp < 86),
+      (temp > -5) & (temp < 30)
     )
   }
 
+  errors <- c()
+
   warn <- function(sn, msg) {
-    message(" => ", msg)
-    # warning("SN ", sn, ": ", msg, call. = F)
+    msg <- paste(sn, "==>", msg)
+    message(msg)
+    errors <<- c(errors, msg)
   }
 
+
   files <- list.files(dir, "*.csv", full.names = T)
-
-  if (length(files) == 0) stop("No csv files found in directory '", dir, "'")
-
-  # if (!is.character(files)) stop("Unable to get list of files from given directory: ", dir)
-
-  # sort files
-  files <- files[order(nchar(files), files)]
+  if (length(files) == 0)
+    stop("No csv files found in directory '", dir, "'")
+  files <- files[order(nchar(files), files)] # sort files
 
   raw_data <- lapply(files, function(file) {
 
@@ -425,13 +429,14 @@ parse_hobos <- function(dir, year) {
       drop_na(Temp) %>%
       mutate(Unit = unit) %>%
       mutate(LoggerSN = as.numeric(sn), .before = 1) %>%
-      mutate(DateTime = parse_date_time(DateTime, c(
-        "%m/%d/%y %H:%M:%S",
-        "%m/%d/%y %H:%M:%S %p",
+      mutate(DateTime = parse_date_time2(DateTime, c(
         "%Y-%m-%d %H:%M:%S",
+        "%m-%d-%Y %H:%M:%S",
+        "%m-%d-%y %H:%M:%S",
+        "%m/%d/%y %I:%M:%S %p",
+        "%m/%d/%y %H:%M:%S",
         "%m/%d/%Y %H:%M",
-        "%m/%d/%Y %H:%M:%S",
-        "%m-%d-%y %H:%M:%S"
+        "%m/%d/%Y %H:%M:%S"
       ), exact = T)) %>%
       mutate(Date = as.Date(DateTime), Year = lubridate::year(Date), .after = DateTime) %>%
       mutate(TempOK = temp_check(Temp, Unit))
@@ -444,7 +449,12 @@ parse_hobos <- function(dir, year) {
       " => ", min(data$Temp), " - ", max(data$Temp), " °", unit, "\n"))
 
     if (length(unique(data$Year)) > 1) {
-      warn(sn, paste0("Multiple years in data range: ", paste(sort(unique(data$Year)), collapse = ", ")))
+      before <- nrow(data)
+      years <- paste(sort(unique(data$Year)), collapse = ", ")
+      data <- filter(data, Year == yr)
+      after <- nrow(data)
+      warn(sn, paste("Multiple years in data range: ", years))
+      warn(sn, paste("Removed", before - after, "values from the wrong year."))
     }
 
     if (!all(data$TempOK)) {
@@ -452,7 +462,7 @@ parse_hobos <- function(dir, year) {
       bad_temps <- filter(data, !TempOK)
       data <- filter(data, TempOK)
       after <- nrow(data)
-      warn(sn, paste0("Removed ", before - after, " temperature value(s) out of range!"))
+      warn(sn, paste("Removed ", before - after, "temperature value(s) out of range"))
       print(bad_temps)
     }
 
@@ -460,16 +470,221 @@ parse_hobos <- function(dir, year) {
       mutate(
         TempF = ifelse(Unit == "F", Temp, round(c_to_f(Temp), 2)),
         TempC = ifelse(Unit == "C", Temp, round(f_to_c(Temp), 2))) %>%
-      select(-c("Temp", "Unit", "TempOK"))
+      select(-Temp, -Unit, -TempOK)
   })
 
+  cat("\n")
+  lapply(errors, function(err) message(err))
+
   bind_rows(raw_data) %>%
-    # mutate(Year = year, .before = Date) %>%
-    clean_names()
+    clean_names() %>%
+    filter(year == yr)
 }
 
 
-## Read Hobo data ----
+clean_hobos <- function(hobodata) {
+  require(dplyr)
+
+  n_loggers <- n_distinct(hobodata$logger_sn)
+  message("Total loggers: ", n_loggers)
+
+  before_counts <- hobodata %>%
+    summarize(
+      date_min = min(date),
+      date_max = max(date),
+      days = n_distinct(date),
+      .by = logger_sn)
+
+  cleaned <- hobodata %>%
+    left_join(therm_inventory, join_by(logger_sn, year)) %>%
+    mutate(
+      after_deployed = if_else(!is.na(date_deployed), date > date_deployed, TRUE),
+      before_removed = if_else(!is.na(date_removed), date < date_removed, TRUE)
+    ) %>%
+    filter(after_deployed & before_removed) %>%
+    select(-c(after_deployed, before_removed)) %>%
+    mutate(
+      month = lubridate::month(date),
+      day = lubridate::day(date),
+      yday = lubridate::yday(date),
+      .after = year) %>%
+    arrange(logger_sn, date_time)
+
+  print(cleaned)
+
+  after_counts <- cleaned %>%
+    summarize(
+      deployed = first(date_deployed),
+      removed = first(date_removed),
+      clean_days = n_distinct(date),
+      station_id = first(station_id),
+      latitude = as.character(first(latitude)),
+      longitude = as.character(first(longitude)),
+      station_name = first(station_name),
+      .by = logger_sn)
+
+  counts <- before_counts %>%
+    left_join(after_counts, join_by(logger_sn)) %>%
+    mutate(
+      days_rm = days - clean_days,
+      status = case_when(
+        is.na(deployed) & is.na(removed) ~ "missing both",
+        is.na(deployed) ~ "missing deployment",
+        is.na(removed) ~ "missing removal",
+        T ~ "OK"
+      ),
+      .after = clean_days
+    )
+
+  print(counts, n = 100)
+  message("Total loggers after cleaning: ", n_distinct(cleaned$logger_sn))
+  message("Loggers missing deployment dates: ", sum(is.na(counts$deployed)))
+  message("Loggers missing removal dates: ", sum(is.na(counts$removed)))
+  message("Loggers missing both dates: ", sum(counts$status == "missing both"))
+
+  list(
+    status = counts,
+    data = cleaned %>%
+      select(-c(contact_name, date_deployed, date_removed))
+  )
+}
+
+# Make thermistor plot
+
+makeThermistorPlot <- function(df_hourly, weather = NULL) {
+  require(dplyr)
+  require(plotly)
+
+  title <- paste(
+    "Logger SN:", df_hourly$logger_sn[1], "|",
+    "Station ID:", df_hourly$station_id[1], "|",
+    "Year:", df_hourly$year[1])
+
+  # make sure daily values time is aligned to noon
+  df_daily <- df_hourly %>%
+    summarize(
+      min = min(temp_f),
+      mean = mean(temp_f),
+      max = max(temp_f),
+      .by = date) %>%
+    mutate(date_time = as.POSIXct(paste(date, "12:00:00")))
+
+  plt <- plot_ly()
+
+  if (!is.null(weather)) {
+    weather <- weather %>%
+      mutate(date_time = as.POSIXct(paste(date, "12:00:00")))
+    plt <- plt %>%
+      add_ribbons(
+      data = weather,
+      x = ~date_time,
+      ymin = ~min_temp,
+      ymax = ~max_temp,
+      line = list(
+        color = "orange",
+        width = 0.5,
+        opacity = 0.1),
+      fillcolor = "orange",
+      opacity = 0.1,
+      name = "Air temperature") %>%
+    add_trace(
+      data = weather,
+      x = ~ date_time,
+      y = ~ avg_temp,
+      name = "Mean air temp.",
+      type = "scatter",
+      mode = "lines",
+      line = list(
+        color = "orange",
+        opacity = .1))
+  }
+
+  plt %>%
+    add_ribbons(
+      data = df_daily,
+      x = ~ date_time,
+      ymin = ~ min,
+      ymax = ~ max,
+      line = list(
+        color = "lightblue",
+        width = 0.5,
+        opacity = 0),
+      fillcolor = "lightblue",
+      opacity = 0.5,
+      name = "Daily water temp range") %>%
+    add_trace(
+      data = df_hourly,
+      x = ~date_time,
+      y = ~temp_f,
+      name = "Hourly Water temp (F)",
+      type = "scatter",
+      mode = "lines",
+      line = list(
+        color = "#1f77b4",
+        width = 0.5,
+        opacity = 0.8)) %>%
+    add_trace(
+      data = df_daily,
+      x = ~ date_time,
+      y = ~ mean,
+      name = "Mean daily water temp.",
+      type = "scatter",
+      mode = "lines",
+      line = list(
+        color = "blue")) %>%
+    layout(
+      title = title,
+      showlegend = TRUE,
+      xaxis = list(title = "Date and time"),
+      yaxis = list(
+        title = "Temperature (F)",
+        range = c(32, 90),
+        fixedrange = T,
+        zerolinecolor = "lightgrey"),
+      hovermode = "x unified",
+      legend = list(
+        orientation = "h",
+        x = 0.25,
+        y = 1),
+      margin = list(
+        t = 50)) %>%
+    config(displayModeBar = F)
+}
+
+inspect_hobos <- function(hobodata, serials = sort(unique(hobodata$logger_sn))) {
+  i <- 1
+  n <- length(serials)
+  for (i in 1:n) {
+    sn <- serials[i]
+    hobo <- hobodata %>%
+      filter(logger_sn == sn)
+    url <- buildAgWxURL(hobo)
+    weather <- getAgWxData(url)
+    makeThermistorPlot(hobo, weather) %>% print()
+    message("Logger ", i, "/", n, ": SN ", sn)
+    resp <- readline("[Enter] for next, q to quit > ")
+    if (tolower(resp) %in% c("q")) break
+  }
+}
+
+buildAgWxURL <- function(df) {
+  start_date = min(df$date)
+  end_date = max(df$date)
+  lat = df$latitude[1]
+  lng = df$longitude[1]
+  glue::glue("https://agweather.cals.wisc.edu/ag_weather/weather?lat={lat}&long={lng}&start_date={start_date}&end_date={end_date}")
+}
+
+getAgWxData <- function(url) {
+  httr::GET(url) %>%
+    httr::content() %>%
+    pluck("data") %>%
+    enframe() %>%
+    unnest_wider("value")
+}
+
+
+## Read and check Hobo data ----
 
 #' File format expectations:
 #' - Row 1 may be skipped, often contained 'plot title' or other heading.
@@ -478,92 +693,90 @@ parse_hobos <- function(dir, year) {
 #' - Temperature in column 3
 #'   - Units must be specified in column name
 
-hobos_2020 <- parse_hobos(dir = "therm/hobodata/2020", year = 2020)
-hobos_2021 <- parse_hobos(dir = "therm/hobodata/2021", year = 2021)
-hobos_2022 <- parse_hobos(dir = "therm/hobodata/2022", year = 2022)
+# Read in raw hobo csv files
+hobos2020.parsed <- parse_hobos("therm/hobodata/2020", 2020)
+hobos2021.parsed <- parse_hobos("therm/hobodata/2021", 2021)
+hobos2022.parsed <- parse_hobos("therm/hobodata/2022", 2022)
+hobos2023.parsed <- parse_hobos("therm/hobodata/2023", 2023)
 
-hobo_data_raw <- bind_rows(
-  hobos_2020,
-  hobos_2021,
-  hobos_2022
-) %>%
-  arrange(logger_sn, date_time) %>%
-  distinct(logger_sn, date_time, .keep_all = T) %>%
-  filter(year >= 2020)
+# save the parsed and combined raw hobo data
+hobos2020.parsed %>% write_csv(paste0("therm/data_parsed/hobos-parsed-2020.csv.gz"))
+hobos2021.parsed %>% write_csv(paste0("therm/data_parsed/hobos-parsed-2021.csv.gz"))
+hobos2022.parsed %>% write_csv(paste0("therm/data_parsed/hobos-parsed-2022.csv.gz"))
+hobos2023.parsed %>% write_csv(paste0("therm/data_parsed/hobos-parsed-2023.csv.gz"))
+
+# Load thermistor inventory, matching SNs with WAV Stns
+# update the inventory with correct deploy/retrieve dates
+# then re-run the cleaning
+therm_inventory <- read_csv("therm/dashboard-therm-inventory.csv") %>%
+  left_join(select(stn_list, station_id, station_name, latitude, longitude), join_by(station_id))
+
+# clean the hobo data using the deployment dates in the inventory
+hobos2020.cleaned <- clean_hobos(hobos2020.parsed)$data
+hobos2021.cleaned <- clean_hobos(hobos2021.parsed)$data
+hobos2022.cleaned <- clean_hobos(hobos2022.parsed)$data
+hobos2023.cleaned <- clean_hobos(hobos2023.parsed)$data
+
+# save these cleaned datasets
+hobos2020.cleaned %>% write_csv(paste0("therm/data_cleaned/hobos-cleaned-2020.csv.gz"))
+hobos2021.cleaned %>% write_csv(paste0("therm/data_cleaned/hobos-cleaned-2021.csv.gz"))
+hobos2022.cleaned %>% write_csv(paste0("therm/data_cleaned/hobos-cleaned-2022.csv.gz"))
+hobos2023.cleaned %>% write_csv(paste0("therm/data_cleaned/hobos-cleaned-2023.csv.gz"))
+
+
+# generate interactive charts to inspect the data and compare to air temperatures
+# currently no way to easily trim internal dates when a logger becomes exposed to the air
+# can use this to confirm deployment and retrieval dates
+# update dates in the inventory file if desired, then re-run the cleaning
+inspect_hobos(hobos2020.cleaned)
+inspect_hobos(hobos2021.cleaned)
+inspect_hobos(hobos2022.cleaned)
+inspect_hobos(hobos2023.cleaned)
+
+
+
+## Merge hobodata ----
+
+hobo_data <- bind_rows(
+  hobos2020.cleaned,
+  hobos2021.cleaned,
+  hobos2022.cleaned,
+  hobos2023.cleaned
+) %>% filter(!is.na(station_id))
 
 # loggers per year
-hobo_data_raw %>%
+hobo_data %>%
   count(logger_sn, year) %>%
   count(year)
 
-## Hobo checks ----
-
 # Collect list of SNs by year
-hobo_sns <- hobo_data_raw %>%
-  distinct(year, logger_sn)
-
-# Load thermistor inventory, matching SNs with WAV Stns
-therm_inventory <- read_csv("therm/therm-inventory.csv")
+hobo_serials <- hobo_data %>%
+  distinct(year, logger_sn) %>%
+  mutate(have_data = T)
 
 # Are we missing data for loggers in the inventory?
-
 therm_inventory %>%
-  left_join({
-    hobo_sns %>%
-      mutate(have_data = T)
-    }) %>%
-  replace_na(list(have_data = F)) %>% {
+  left_join(hobo_serials) %>%
+  replace_na(list(have_data = F)) %>%
+  filter(!have_data) %>%
+  arrange(desc(year)) %>%
+  {
     print(.)
-    write_csv(., "therm/Thermistors - missing data for loggers in inventory.csv")
+    write_csv(., "therm/QC/Thermistors - Inventory entries without matching data.csv")
   }
-
-
-# Join the inventory
-therm_stns <- hobo_sns %>%
-  left_join(therm_inventory) %>%
-  left_join(stn_list)
-
-# Any loggers missing stations?
-therm_stns %>%
-  filter(is.na(station_id)) %>% {
-    print(.)
-    write_csv(., "therm/Thermistors - missing logger stations.csv")
-  }
-
-
-
-## Add locations to hobo data and trim----
-
-hobo_data <- hobo_data_raw %>%
-  left_join(therm_stns, multiple = "all") %>%
-  drop_na(station_id) %>%
-  mutate(
-    after_deploy = ifelse(is.na(date_deployed), TRUE, date > date_deployed),
-    before_removed = ifelse(is.na(date_removed), TRUE, date < date_removed)
-  ) %>%
-  filter(after_deploy & before_removed) %>%
-  select(date_time:temp_c, logger_sn, device_type, station_id, station_name, latitude, longitude) %>%
-  filter(year == lubridate::year(date)) %>%
-  mutate(
-    month = lubridate::month(date),
-    day = lubridate::day(date),
-    .after = "year")
-
-# should show that no rows are missing location data
-hobo_data %>% filter(is.na(latitude))
 
 
 ## Export ----
 
-therm_inventory %>% write_csv("therm_clean/therm-info.csv")
-therm_inventory %>% write_csv("../WAV Dashboard/data/therm-info.csv.gz")
+therm_inventory %>% write_csv("therm_clean/therm-inventory.csv")
+therm_inventory %>% write_csv("../WAV Dashboard/data/therm-inventory.csv.gz")
 
-hobo_data %>% write_csv("therm_clean/therm-data.csv")
+hobo_data %>% write_csv("therm_clean/therm-data.csv.gz")
 hobo_data %>% write_csv("../WAV Dashboard/data/therm-data.csv.gz")
 
 
 
-# Finalize station list -------------------------------------------------------
+# 6 => Finalize station list ===================================================
 
 ## Check baseline ----
 
