@@ -49,7 +49,12 @@ quickmap <- function(shape) {
 
 counties <- read_sf("shp/wi-county-bounds.geojson") %>%
   clean_names("big_camel") %>%
-  st_make_valid()
+  st_make_valid() %>%
+  select(
+    CountyName,
+    DnrRegion = DnrRegionName,
+    geometry
+  )
 
 counties.simp <- ms_simplify(counties, .25)
 
