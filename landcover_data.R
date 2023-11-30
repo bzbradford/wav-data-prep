@@ -42,13 +42,13 @@ huc8_ls <- huc8 %>%
   st_transform(crs = crs(nlcd)) %>%
   mutate(huc = Huc8Code) %>%
   exact_extract(
-    x = nlcd,
-    y = .,
+    x = nlcd, y = .,
     include_cols = "huc",
     coverage_area = T,
     summarize_df = T,
     fun = extractfn
   )
+
 
 # HUC 10 ----
 
@@ -61,8 +61,7 @@ huc10_ls <- huc10 %>%
   st_transform(crs = crs(nlcd)) %>%
   mutate(huc = Huc10Code) %>%
   exact_extract(
-    x = nlcd,
-    y = .,
+    x = nlcd, y = .,
     include_cols = "huc",
     coverage_area = T,
     summarize_df = T,
@@ -81,8 +80,7 @@ huc12_ls <- huc12 %>%
   st_transform(crs = crs(nlcd)) %>%
   mutate(huc = Huc12Code) %>%
   exact_extract(
-    x = nlcd,
-    y = .,
+    x = nlcd, y = .,
     include_cols = "huc",
     coverage_area = T,
     summarize_df = T,
@@ -97,20 +95,19 @@ nlcd_classes <- read_csv("land/nlcd_classes.csv") %>%
   mutate(hex = gplots::col2hex(color))
 
 landscape_data <- bind_rows(
-  {huc8_attr %>% left_join(huc8_ls)},
-  {huc10_attr %>% left_join(huc10_ls)},
-  {huc12_attr %>% left_join(huc12_ls)}
+  left_join(huc8_attr, huc8_ls),
+  left_join(huc10_attr, huc10_ls),
+  left_join(huc12_attr, huc12_ls)
 ) %>%
   mutate(class = case_when(class == 0 ~ 11, T ~ class))
 
 
 # Export/Import ----
 
-landscape_data %>% write_csv("land/landcover.csv.gz")
-landscape_data %>% write_csv("../WAV Dashboard/data/landcover.csv.gz")
-nlcd_classes %>% write_csv("../WAV Dashboard/data/nlcd_classes.csv")
-
+landscape_data %>% write_csv("_clean/landcover.csv")
 # landscape_data <- read_csv("land/landcover.csv.gz")
+landscape_data %>% saveRDS("../WAV Dashboard/data/landcover")
+nlcd_classes %>% saveRDS("../WAV Dashboard/data/nlcd_classes")
 
 
 
