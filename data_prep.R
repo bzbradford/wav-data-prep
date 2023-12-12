@@ -143,15 +143,24 @@ huc10 <- st_transform(huc10.wtm, 4326)
 huc12 <- st_transform(huc12.wtm, 4326)
 
 # DNR watersheds (approx HUC10)
-dnr_wsheds <- read_sf("shp/wi-dnr-watersheds.geojson") %>%
+dnr_watersheds <- read_sf("shp/wi-dnr-watersheds.geojson") %>%
   clean_names(case = "big_camel") %>%
-  st_make_valid()
+  st_make_valid() %>%
+  select(
+    DnrWatershedCode = WshedCode,
+    DnrWatershedName = WshedName,
+    SizeAcres = WatershedSizeAcresAmt,
+    SizeSqMiles = WatershedSizeSqMilesAmt,
+    TotalLakeAcres = TotalLakeAcresAmt,
+    TotalWetlandAcres = TotalWetlandAcresAmt,
+    geometry
+  )
 
 # simplify
 huc8.simp <- ms_simplify(huc8, .5)
 huc10.simp <- ms_simplify(huc10, .5)
 huc12.simp <- ms_simplify(huc12, .5)
-dnr_wsheds.simp <- ms_simplify(dnr_wsheds, .15)
+dnr_watersheds.simp <- ms_simplify(dnr_watersheds, .15)
 
 # inspect
 quickmap(huc6)
@@ -161,8 +170,8 @@ quickmap(huc10)
 quickmap(huc10.simp)
 quickmap(huc12)
 quickmap(huc12.simp)
-quickmap(dnr_wsheds)
-quickmap(dnr_wsheds.simp)
+quickmap(dnr_watersheds)
+quickmap(dnr_watersheds.simp)
 
 
 ## Major waterbodies ----
@@ -178,6 +187,7 @@ nkes.simp %>% saveRDS("../WAV Dashboard/data/shp/nkes")
 huc8.simp %>% saveRDS("../WAV Dashboard/data/shp/huc8")
 huc10.simp %>% saveRDS("../WAV Dashboard/data/shp/huc10")
 huc12.simp %>% saveRDS("../WAV Dashboard/data/shp/huc12")
+dnr_watersheds.simp %>% saveRDS("../WAV Dashboard/data/shp/dnr_watersheds")
 waterbodies %>% saveRDS("../WAV Dashboard/data/shp/waterbodies")
 
 
@@ -187,7 +197,7 @@ waterbodies %>% saveRDS("../WAV Dashboard/data/shp/waterbodies")
 ## Baseline observations ----
 
 baseline_in <- read_csv(
-  "baseline/Baseline 2015-2023 v20231010.csv",
+  "baseline/Baseline 2015-2023 v20231205.csv",
   col_types = list(.default = "c")) %>%
   clean_names()
 
@@ -232,7 +242,7 @@ baseline_obs <- baseline_in %>%
 
 ## Baseline flow ----
 
-flow_in <- read_csv("baseline/Streamflow 2015-2023 v20231010.csv", col_types = list(.default = "c")) %>%
+flow_in <- read_csv("baseline/Streamflow 2015-2023 v20231205.csv", col_types = list(.default = "c")) %>%
   clean_names()
 
 names(flow_in)
@@ -292,19 +302,28 @@ key_baseline_vars <- c(
   "air_temp",
   "water_temp",
   "d_o",
+  "ph",
+  "specific_cond",
   "transparency",
   "streamflow"
 )
 
+# find stations where all FSNs in a year have no baseline data and drop them
 has_key_baseline_data <- baseline_data %>%
-  select(fieldwork_seq_no, all_of(key_baseline_vars)) %>%
-  pivot_longer(2:last_col()) %>%
-  summarize(valid = sum(!is.na(value)) > 0, .by = fieldwork_seq_no)
-valid_fieldwork_seq_no <- has_key_baseline_data %>%
-  filter(valid) %>%
-  pull(fieldwork_seq_no)
-message(nrow(baseline_data) - length(valid_fieldwork_seq_no), " fieldwork events dropped due to having no key baseline data")
+  select(station_id, year, fieldwork_seq_no, all_of(key_baseline_vars)) %>%
+  pivot_longer(all_of(key_baseline_vars)) %>%
+  summarize(has_baseline = sum(!is.na(value)) > 0, .by = c(station_id, year, fieldwork_seq_no)) %>%
+  mutate(valid_year = any(has_baseline), .by = c(station_id, year)) %>%
+  filter(valid_year)
+
+valid_fieldwork_seq_no <- has_key_baseline_data$fieldwork_seq_no
+
+invalid_baseline_data <- baseline_data %>%
+  filter(!(fieldwork_seq_no %in% valid_fieldwork_seq_no))
+
 # message says how many baseline fieldworks will be dropped due to lack of data
+message(nrow(baseline_data) - length(valid_fieldwork_seq_no), " fieldwork events dropped due to having no key baseline data")
+
 
 
 ## Final baseline join and filter ----
@@ -315,7 +334,7 @@ baseline_final <- baseline_data %>%
   filter(fieldwork_seq_no %in% valid_fieldwork_seq_no)
 
 # export
-baseline_final %>% write_csv("_clean/baseline-data.csv")
+baseline_final %>% write_csv("~clean/baseline-data.csv")
 baseline_final %>% saveRDS("../WAV Dashboard/data/baseline-data")
 
 
@@ -350,7 +369,7 @@ tp_final <- tp_data %>%
   arrange(station_id, date)
 
 # export
-tp_final %>% write_csv("_clean/tp-data.csv")
+tp_final %>% write_csv("~clean/tp-data.csv")
 tp_final %>% saveRDS("../WAV Dashboard/data/tp-data")
 
 
@@ -369,8 +388,8 @@ parse_hobos <- function(dir, yr) {
   temp_check <- function(temp, unit) {
     if_else(
       unit == "F",
-      (temp > 23) & (temp < 86),
-      (temp > -5) & (temp < 30)
+      between(temp, 23, 86),
+      between(temp, -5, 30)
     )
   }
 
@@ -659,8 +678,10 @@ inspect_hobos <- function(hobodata, serials = sort(unique(hobodata$logger_sn))) 
     weather <- getAgWxData(url)
     makeThermistorPlot(hobo, weather) %>% print()
     message("Logger ", i, "/", n, ": SN ", sn)
-    resp <- readline("[Enter] for next, q to quit > ")
-    if (tolower(resp) %in% c("q")) break
+    if (n > 1) {
+      resp <- readline("[Enter] for next, q to quit > ")
+      if (tolower(resp) %in% c("q")) break
+    }
   }
 }
 
@@ -685,9 +706,8 @@ getAgWxData <- function(url) {
 }
 
 # saves all the hobo files individually for SWIMS upload
-export_hobos <- function(clean_data, out_dir = "_clean/hobodata") {
+export_hobos <- function(clean_data, logger_serials = unique(clean_data$logger_sn), out_dir = "~clean/hobodata") {
   yr <- clean_data$year[1]
-  logger_serials <- unique(clean_data$logger_sn)
   out_dir <- file.path(out_dir, yr)
   dir.create(out_dir, showWarnings = F)
   for (sn in logger_serials) {
@@ -697,6 +717,7 @@ export_hobos <- function(clean_data, out_dir = "_clean/hobodata") {
     stn_id <- df$station_id[1]
     fname <- glue::glue("Hobo data {yr} - SN {sn} - Stn {stn_id}.csv")
     fpath <- file.path(out_dir, fname)
+    message("Writing '", fpath, "'")
     write_csv(df, fpath)
   }
 }
@@ -736,7 +757,19 @@ hobos2023.cleaned <- clean_hobos(hobos2023.parsed)
 inspect_hobos(hobos2020.cleaned)
 inspect_hobos(hobos2021.cleaned)
 inspect_hobos(hobos2022.cleaned)
-inspect_hobos(hobos2023.cleaned, 21365749)
+inspect_hobos(hobos2023.cleaned, 20361498)
+
+# save these cleaned datasets
+hobos2020.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2020.csv.gz")
+hobos2021.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2021.csv.gz")
+hobos2022.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2022.csv.gz")
+hobos2023.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2023.csv.gz")
+
+# export individual CSVs
+export_hobos(hobos2020.cleaned)
+export_hobos(hobos2021.cleaned)
+export_hobos(hobos2022.cleaned)
+export_hobos(hobos2023.cleaned)
 
 
 ## Merge hobodata ----
@@ -759,37 +792,30 @@ hobo_serials <- hobo_data %>%
   mutate(have_data = T)
 
 # Are we missing data for loggers in the inventory?
-therm_inventory %>%
+therm_info <- therm_inventory %>%
   left_join(hobo_serials) %>%
   replace_na(list(have_data = F)) %>%
+  arrange(year)
+
+therm_info %>%
   filter(!have_data) %>%
-  arrange(desc(year)) %>%
   {
     print(.)
     write_csv(., "therm/QC/Thermistors - Inventory entries without matching data.csv")
   }
 
+therm_info_export <- therm_info %>%
+  filter(have_data) %>%
+  select(-have_data)
 
 ## Export ----
 
-# save these cleaned datasets
-hobos2020.cleaned %>% write_csv("_clean/hobodata/hobos-cleaned-2020.csv.gz")
-hobos2021.cleaned %>% write_csv("_clean/hobodata/hobos-cleaned-2021.csv.gz")
-hobos2022.cleaned %>% write_csv("_clean/hobodata/hobos-cleaned-2022.csv.gz")
-hobos2023.cleaned %>% write_csv("_clean/hobodata/hobos-cleaned-2023.csv.gz")
-
-# export individual CSVs
-export_hobos(hobos2020.cleaned)
-export_hobos(hobos2021.cleaned)
-export_hobos(hobos2022.cleaned)
-export_hobos(hobos2023.cleaned)
-
 # export inventory
-therm_inventory %>% write_csv("_clean/therm-inventory.csv")
-hobo_data %>% write_csv("_clean/therm-data.csv")
+therm_info_export %>% write_csv("~clean/therm-inventory.csv")
+hobo_data %>% write_csv("~clean/therm-data.csv")
 
 # export data to dashboard
-therm_inventory %>% saveRDS("../WAV Dashboard/data/therm-inventory")
+therm_info_export %>% saveRDS("../WAV Dashboard/data/therm-inventory")
 hobo_data %>% saveRDS("../WAV Dashboard/data/therm-data")
 
 
@@ -846,21 +872,21 @@ keep_stns <- sort(unique(c(
 stn_list.sf <- stn_list %>%
   filter(station_id %in% keep_stns) %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = F) %>%
-  st_join(select(counties, DnrRegionName, CountyName)) %>%
+  st_join(select(counties, DnrRegion, CountyName)) %>%
   st_join(select(huc12, -Area)) %>%
-  st_join(select(dnr_watersheds, WshedName, WshedCode)) %>%
+  st_join(select(dnr_watersheds, DnrWatershedCode, DnrWatershedName)) %>%
   select(
     station_id, station_name,
     latitude, longitude,
     county_name = CountyName,
-    dnr_region = DnrRegionName,
+    dnr_region = DnrRegion,
     wbic, waterbody,
     huc12 = Huc12Code,
     sub_watershed = Huc12Name,
     huc10 = Huc10Code,
     watershed = Huc10Name,
-    dnr_watershed_name = WshedName,
-    dnr_watershed_code = WshedCode,
+    dnr_watershed_name = DnrWatershedName,
+    dnr_watershed_code = DnrWatershedCode,
     huc8 = Huc8Code,
     sub_basin = Huc8Name,
     major_basin = MajorBasin,
@@ -889,7 +915,7 @@ all_stns <- stn_list.sf %>%
 # tp_stns <- all_stns %>%
 #   filter(station_id %in% tp_data$station_id)
 
-all_stns %>% write_csv("_clean/station-list.csv")
+all_stns %>% write_csv("~clean/station-list.csv")
 all_stns %>% saveRDS("../WAV Dashboard/data/station-list")
 
 
