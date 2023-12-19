@@ -363,7 +363,32 @@ tp_data <- list(
   mutate(tp = as.numeric(if_else(tp == "ND", "0", tp)))
 # non-detects replaced with zeros for now, need to implement something better later
 
+
+# Milwaukee River Keeper data
+mrk_tp <- read_csv("nutrient/2023 Milwaukee River Keeper total phosphorus.csv") %>%
+  # select total phosphorus, should be all that's in here though
+  filter(DNRParameterCode == 665) %>%
+  select(
+    station_id = StationID,
+    volunteer_name = CollectorName,
+    datetime = SampleStartDateTime,
+    tp = ResultValueNo) %>%
+  mutate(
+    across(volunteer_name, str_to_title),
+    datetime = parse_date_time2(datetime, "mdY HMS Op"),
+    date = as.Date(datetime),
+    year = year(date),
+    month = month(date),
+    month_name = month.name[month]) %>%
+  mutate(num_obs = sum(!is.na(tp)), .by = c(year, station_id)) %>%
+  select(-datetime) %>%
+  filter(tp <= 1) # there are 2 anomalous? values
+
+mrk_tp %>%
+  arrange(desc(tp))
+
 tp_final <- tp_data %>%
+  bind_rows(mrk_tp) %>%
   left_join(stn_list) %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date)
@@ -757,7 +782,7 @@ hobos2023.cleaned <- clean_hobos(hobos2023.parsed)
 inspect_hobos(hobos2020.cleaned)
 inspect_hobos(hobos2021.cleaned)
 inspect_hobos(hobos2022.cleaned)
-inspect_hobos(hobos2023.cleaned, 20361498)
+inspect_hobos(hobos2023.cleaned, 20211524)
 
 # save these cleaned datasets
 hobos2020.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2020.csv.gz")
@@ -769,7 +794,7 @@ hobos2023.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2023.csv.gz")
 export_hobos(hobos2020.cleaned)
 export_hobos(hobos2021.cleaned)
 export_hobos(hobos2022.cleaned)
-export_hobos(hobos2023.cleaned)
+export_hobos(hobos2023.cleaned, 20211524)
 
 
 ## Merge hobodata ----
