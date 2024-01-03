@@ -12,8 +12,8 @@ library(rmapshaper) # ms_simplify
 
 # 1 => Load SWIMS Stations =====================================================
 
-stn_list <-  read_csv(
-  "stations/WAV Stations v20230824.csv",
+stn_list <- read_csv(
+  "stations/WAV_stations_Jan24.csv",
   col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
   clean_names() %>%
   select(
@@ -196,9 +196,8 @@ waterbodies %>% saveRDS("../WAV Dashboard/data/shp/waterbodies")
 
 ## Baseline observations ----
 
-baseline_in <- read_csv(
-  "baseline/Baseline 2015-2023 v20231205.csv",
-  col_types = list(.default = "c")) %>%
+baseline_in <-
+  read_csv("baseline/WAV_2015_Jan24.csv", col_types = list(.default = "c")) %>%
   clean_names()
 
 names(baseline_in)
@@ -242,7 +241,8 @@ baseline_obs <- baseline_in %>%
 
 ## Baseline flow ----
 
-flow_in <- read_csv("baseline/Streamflow 2015-2023 v20231205.csv", col_types = list(.default = "c")) %>%
+flow_in <-
+  read_csv("baseline/WAV_FLOW_2015_Jan24.csv", col_types = list(.default = "c")) %>%
   clean_names()
 
 names(flow_in)
@@ -536,7 +536,7 @@ clean_hobos <- function(hobodata, return_status = FALSE) {
       after_deployed = if_else(!is.na(date_deployed), date > date_deployed, TRUE),
       before_removed = if_else(!is.na(date_removed), date < date_removed, TRUE)
     ) %>%
-    filter(after_deployed & before_removed) %>%
+    filter(!is.na(station_id) & after_deployed & before_removed) %>%
     select(-c(after_deployed, before_removed)) %>%
     mutate(
       month = lubridate::month(date),
@@ -564,8 +564,9 @@ clean_hobos <- function(hobodata, return_status = FALSE) {
     mutate(
       days_rm = days - clean_days,
       status = case_when(
-        is.na(deployed) & is.na(removed) ~ "missing both",
-        is.na(deployed) ~ "missing deployment",
+        is.na(station_id) ~ "missing station id",
+        is.na(deployed) & is.na(removed) ~ "missing deploy/removal",
+        is.na(deployed) ~ "missing deploy",
         is.na(removed) ~ "missing removal",
         T ~ "OK"
       ),
@@ -574,9 +575,9 @@ clean_hobos <- function(hobodata, return_status = FALSE) {
 
   print(counts, n = 100)
   message("Total loggers after cleaning: ", n_distinct(cleaned$logger_sn))
+  message("Loggers missing station id: ", sum(counts$status == "missing station id"))
   message("Loggers missing deployment dates: ", sum(is.na(counts$deployed)))
   message("Loggers missing removal dates: ", sum(is.na(counts$removed)))
-  message("Loggers missing both dates: ", sum(counts$status == "missing both"))
 
   if (return_status) {
     counts
@@ -607,35 +608,56 @@ makeThermistorPlot <- function(df_hourly, weather = NULL) {
       max = max(temp_f),
       .by = date) %>%
     mutate(date_time = as.POSIXct(paste(date, "12:00:00")))
+  daterange <- c(min(df_daily$date_time), max(df_daily$date_time))
 
   plt <- plot_ly()
 
   if (!is.null(weather)) {
     weather <- weather %>%
       mutate(date_time = as.POSIXct(paste(date, "12:00:00")))
+    daily_ranges <- df_daily %>%
+      summarize(water_range = max - mean, .by = date_time) %>%
+      left_join(
+        summarize(weather, air_range = max_temp - min_temp, .by = date_time),
+        join_by(date_time)
+      ) %>%
+      mutate(ratio = water_range / air_range, valid = water_range < air_range)
+    range_pal <-
     plt <- plt %>%
+      add_bars(
+        data = daily_ranges,
+        x = ~date_time,
+        y = ~ratio,
+        marker = list(
+          color = ~ratio,
+          colorscale = "Viridis",
+          cmin = 0, cmax = 1,
+          reversescale = T),
+        yaxis = "y2",
+        name = "Water:air ratio",
+        hovertemplate = "%{y:.2f}"
+      ) %>%
       add_ribbons(
-      data = weather,
-      x = ~date_time,
-      ymin = ~min_temp,
-      ymax = ~max_temp,
-      line = list(
-        color = "orange",
-        width = 0.5,
-        opacity = 0.1),
-      fillcolor = "orange",
-      opacity = 0.1,
-      name = "Air temperature") %>%
-    add_trace(
-      data = weather,
-      x = ~ date_time,
-      y = ~ avg_temp,
-      name = "Mean air temp.",
-      type = "scatter",
-      mode = "lines",
-      line = list(
-        color = "orange",
-        opacity = .1))
+        data = weather,
+        x = ~date_time,
+        ymin = ~min_temp,
+        ymax = ~max_temp,
+        line = list(color = "orange", width = 0.5, opacity = 0.1),
+        fillcolor = "orange",
+        opacity = 0.1,
+        name = "Air temperature",
+        hovertemplate = "%{y:.1f}"
+      ) %>%
+      add_trace(
+        data = weather,
+        x = ~ date_time,
+        y = ~ avg_temp,
+        name = "Mean air temp.",
+        type = "scatter",
+        mode = "lines",
+        line = list(color = "orange", opacity = .1),
+        hovertemplate = "%{y:.1f}"
+      )
   }
 
   plt %>%
@@ -644,13 +666,12 @@ makeThermistorPlot <- function(df_hourly, weather = NULL) {
       x = ~ date_time,
       ymin = ~ min,
       ymax = ~ max,
-      line = list(
-        color = "lightblue",
-        width = 0.5,
-        opacity = 0),
+      line = list(color = "lightblue", width = 0.5, opacity = 0),
       fillcolor = "lightblue",
       opacity = 0.5,
-      name = "Daily water temp range") %>%
+      name = "Daily water temp range",
+      hovertemplate = "%{y:.1f}"
+    ) %>%
     add_trace(
       data = df_hourly,
       x = ~date_time,
@@ -658,10 +679,8 @@ makeThermistorPlot <- function(df_hourly, weather = NULL) {
       name = "Hourly Water temp (F)",
       type = "scatter",
       mode = "lines",
-      line = list(
-        color = "#1f77b4",
-        width = 0.5,
-        opacity = 0.8)) %>%
+      line = list(color = "#1f77b4", width = 0.5, opacity = 0.8)
+    ) %>%
     add_trace(
       data = df_daily,
       x = ~ date_time,
@@ -669,25 +688,34 @@ makeThermistorPlot <- function(df_hourly, weather = NULL) {
       name = "Mean daily water temp.",
       type = "scatter",
       mode = "lines",
-      line = list(
-        color = "blue")) %>%
+      line = list(color = "blue"),
+      hovertemplate = "%{y:.1f}"
+    ) %>%
     layout(
       title = title,
       showlegend = TRUE,
-      xaxis = list(title = "Date and time"),
+      xaxis = list(
+        title = "Date and time",
+        range = daterange),
       yaxis = list(
         title = "Temperature (F)",
         range = c(32, 90),
-        fixedrange = T,
         zerolinecolor = "lightgrey"),
+      yaxis2 = list(
+        title = "Water:air temperature ratio",
+        side = "right", overlaying = "y",
+        showgrid = F, zeroline = F, range = c(0, 4),
+        automargin = T
+      ),
       hovermode = "x unified",
       legend = list(
         orientation = "h",
         x = 0.25,
         y = 1),
-      margin = list(
-        t = 50)) %>%
-    config(displayModeBar = F)
+      margin = list(t = 50)
+    ) %>%
+    config(displayModeBar = F) %>%
+    hide_colorbar()
 }
 
 
@@ -698,15 +726,15 @@ inspect_hobos <- function(hobodata, serials = sort(unique(hobodata$logger_sn))) 
   n <- length(serials)
   for (i in 1:n) {
     sn <- serials[i]
+    message("Logger ", i, "/", n, ": SN ", sn)
     hobo <- hobodata %>% filter(logger_sn == sn)
+    info <- last(hobo)
     url <- buildAgWxURL(hobo)
     weather <- getAgWxData(url)
     makeThermistorPlot(hobo, weather) %>% print()
-    message("Logger ", i, "/", n, ": SN ", sn)
-    if (n > 1) {
-      resp <- readline("[Enter] for next, q to quit > ")
-      if (tolower(resp) %in% c("q")) break
-    }
+    if (n == 1 || i == n) break
+    resp <- readline("[Enter] for next, q to quit > ")
+    if (resp != "") break
   }
 }
 
@@ -758,10 +786,11 @@ export_hobos <- function(clean_data, logger_serials = unique(clean_data$logger_s
 #'   - Units must be specified in column name
 
 # Read in raw hobo csv files
-hobos2020.parsed <- parse_hobos("therm/hobodata/2020", 2020)
-hobos2021.parsed <- parse_hobos("therm/hobodata/2021", 2021)
-hobos2022.parsed <- parse_hobos("therm/hobodata/2022", 2022)
-hobos2023.parsed <- parse_hobos("therm/hobodata/2023", 2023)
+hobos2020_parsed <- parse_hobos("therm/hobodata/2020", 2020)
+hobos2021_parsed <- parse_hobos("therm/hobodata/2021", 2021)
+hobos2022_parsed <- parse_hobos("therm/hobodata/2022", 2022)
+hobos2023_parsed <- parse_hobos("therm/hobodata/2023", 2023)
+hobos2023_mrk_parsed <- parse_hobos("therm/hobodata/2023_mrk", 2023)
 
 # Load thermistor inventory, matching SNs with WAV Stns
 # update the inventory with correct deploy/retrieve dates
@@ -770,40 +799,48 @@ therm_inventory <- read_csv("therm/combined-hobo-inventory.csv") %>%
   left_join(select(stn_list, station_id, station_name, latitude, longitude), join_by(station_id))
 
 # clean the hobo data using the deployment dates in the inventory
-hobos2020.cleaned <- clean_hobos(hobos2020.parsed)
-hobos2021.cleaned <- clean_hobos(hobos2021.parsed)
-hobos2022.cleaned <- clean_hobos(hobos2022.parsed)
-hobos2023.cleaned <- clean_hobos(hobos2023.parsed)
+hobos2020 <- clean_hobos(hobos2020_parsed)
+hobos2021 <- clean_hobos(hobos2021_parsed)
+hobos2022 <- clean_hobos(hobos2022_parsed)
+hobos2023_wav <- clean_hobos(hobos2023_parsed)
+hobos2023_mrk <- clean_hobos(hobos2023_mrk_parsed)
 
 # generate interactive charts to inspect the data and compare to air temperatures
 # currently no way to easily trim internal dates when a logger becomes exposed to the air
 # can use this to confirm deployment and retrieval dates
 # update dates in the inventory file if desired, then re-run the cleaning
-inspect_hobos(hobos2020.cleaned)
-inspect_hobos(hobos2021.cleaned)
-inspect_hobos(hobos2022.cleaned)
-inspect_hobos(hobos2023.cleaned, 20211524)
+inspect_hobos(hobos2020)
+inspect_hobos(hobos2021)
+inspect_hobos(hobos2022)
+inspect_hobos(hobos2023_wav)
+inspect_hobos(hobos2023_mrk)
+
+# merge WAV and MRK hobo data
+hobos2023 <-
+  bind_rows(hobos2023_wav, hobos2023_mrk) %>%
+  # exclude logger(s) with very dubious data
+  filter(!(logger_sn %in% c(20820405)))
 
 # save these cleaned datasets
-hobos2020.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2020.csv.gz")
-hobos2021.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2021.csv.gz")
-hobos2022.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2022.csv.gz")
-hobos2023.cleaned %>% write_csv("~clean/hobodata/hobos-cleaned-2023.csv.gz")
+hobos2020 %>% write_csv("~clean/hobodata/hobos-cleaned-2020.csv.gz")
+hobos2021 %>% write_csv("~clean/hobodata/hobos-cleaned-2021.csv.gz")
+hobos2022 %>% write_csv("~clean/hobodata/hobos-cleaned-2022.csv.gz")
+hobos2023 %>% write_csv("~clean/hobodata/hobos-cleaned-2023.csv.gz")
 
 # export individual CSVs
-export_hobos(hobos2020.cleaned)
-export_hobos(hobos2021.cleaned)
-export_hobos(hobos2022.cleaned)
-export_hobos(hobos2023.cleaned, 20211524)
+export_hobos(hobos2020)
+export_hobos(hobos2021)
+export_hobos(hobos2022)
+export_hobos(hobos2023)
 
 
 ## Merge hobodata ----
 
 hobo_data <- bind_rows(
-  hobos2020.cleaned,
-  hobos2021.cleaned,
-  hobos2022.cleaned,
-  hobos2023.cleaned
+  hobos2020,
+  hobos2021,
+  hobos2022,
+  hobos2023
 ) %>% filter(!is.na(station_id))
 
 # loggers per year
@@ -831,13 +868,14 @@ therm_info %>%
 
 therm_info_export <- therm_info %>%
   filter(have_data) %>%
-  select(-have_data)
+  select(year, logger_sn, device_type, contact_name, date_deployed, date_removed, station_id, station_name, latitude, longitude)
+
 
 ## Export ----
 
 # export inventory
 therm_info_export %>% write_csv("~clean/therm-inventory.csv")
-hobo_data %>% write_csv("~clean/therm-data.csv")
+hobo_data %>% write_csv("~clean/therm-data.csv.gz")
 
 # export data to dashboard
 therm_info_export %>% saveRDS("../WAV Dashboard/data/therm-inventory")
@@ -868,6 +906,7 @@ tp_data %>% count(station_id)
 
 # any nutrient stations missing?
 tp_data %>%
+  drop_na() %>%
   count(station_id) %>%
   filter(!(station_id %in% stn_list$station_id))
 
