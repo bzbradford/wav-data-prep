@@ -26,7 +26,7 @@ extractfn <- function(df) {
 # load NLCD ----
 
 # WI NLCD
-nlcd <- rast("D:/GIS/raster/nlcd_2021_land_cover_l48_20230630/nlcd_2021_land_cover.tif")
+nlcd <- rast("D:/GIS/raster/nlcd_conus/nlcd_2021_land_cover_l48_20230630/nlcd_2021_land_cover.tif")
 st_crs(nlcd)
 plot(nlcd)
 
@@ -103,11 +103,15 @@ landscape_data <- bind_rows(
 
 
 # Export/Import ----
-
-landscape_data %>% write_csv("_clean/landcover.csv")
 # landscape_data <- read_csv("land/landcover.csv.gz")
-landscape_data %>% saveRDS("../WAV Dashboard/data/landcover")
-nlcd_classes %>% saveRDS("../WAV Dashboard/data/nlcd_classes")
+{
+  nlcd_classes %>% write_csv("~clean/nlcd-classes.csv")
+  nlcd_classes %>% saveRDS("../WAV Dashboard/data/nlcd_classes.rds")
+  message("Saved NLCD class list")
+  landscape_data %>% write_csv("~clean/nlcd-landcover.csv")
+  landscape_data %>% saveRDS("../WAV Dashboard/data/landcover")
+  message("Saved NLCD landcover")
+}
 
 
 

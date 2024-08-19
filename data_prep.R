@@ -10,6 +10,8 @@ library(plotly)
 library(rmapshaper) # ms_simplify
 
 
+DASHBOARD_DIR <- "../WAV Dashboard/data/"
+
 # 1 => Load SWIMS Stations =====================================================
 
 stn_list <- read_csv(
@@ -181,14 +183,26 @@ waterbodies <- read_sf("shp/wi-major-lakes.geojson")
 
 
 ## Export shapes ----
+{
+  shapes <- list(
+    counties = counties.simp,
+    nkes = nkes.simp,
+    huc8 = huc8.simp,
+    huc12 = huc12.simp,
+    dnr_watersheds = dnr_watersheds.simp,
+    waterbodies = waterbodies
+  )
+  for (shape in names(shapes)) {
+    fname <- paste0("~clean/shp/", shape, ".rds")
+    saveRDS(shapes[[shape]], fname)
+    message("Save shape => ", fname)
+    fname <- paste0(DASHBOARD_DIR, "shp/", shape, ".rds")
+    saveRDS(shapes[[shape]], fname)
+    message("Update dashboard => ", fname)
+  }
+  rm(shapes, shape, fname)
+}
 
-counties.simp %>% saveRDS("../WAV Dashboard/data/shp/counties")
-nkes.simp %>% saveRDS("../WAV Dashboard/data/shp/nkes")
-huc8.simp %>% saveRDS("../WAV Dashboard/data/shp/huc8")
-huc10.simp %>% saveRDS("../WAV Dashboard/data/shp/huc10")
-huc12.simp %>% saveRDS("../WAV Dashboard/data/shp/huc12")
-dnr_watersheds.simp %>% saveRDS("../WAV Dashboard/data/shp/dnr_watersheds")
-waterbodies %>% saveRDS("../WAV Dashboard/data/shp/waterbodies")
 
 
 
@@ -197,14 +211,19 @@ waterbodies %>% saveRDS("../WAV Dashboard/data/shp/waterbodies")
 ## Baseline observations ----
 
 baseline_in <-
-  read_csv("baseline/WAV_2015_Jan24.csv", col_types = list(.default = "c")) %>%
+  list(
+    "baseline/WAV Baseline 2015-2023.csv",
+    "baseline/WAV Baseline 2024 v20240813.csv"
+  ) %>%
+  lapply(read_csv, col_types = list(.default = "c")) %>%
+  bind_rows() %>%
   clean_names()
 
 names(baseline_in)
 
 baseline_obs <- baseline_in %>%
   select(
-    fieldwork_seq_no,
+    fsn = fieldwork_seq_no,
     datetime = start_datetime,
     station_id,
     station_type_code,
@@ -229,27 +248,32 @@ baseline_obs <- baseline_in %>%
     across(c(air_temp, water_temp, d_o, d_o_percent_saturation, ph, specific_cond, transparency, transparency_tube_length), as.numeric),
     across(c(weather_last_2_days, additional_comments, fieldwork_comments), ~ str_to_sentence(str_squish(.x))),
     weather_conditions = str_to_sentence(gsub("_", " ", weather_conditions)),
-    across(c(fieldwork_seq_no, station_id), as.integer),
+    across(c(fsn, station_id), as.integer),
     across(datetime, ~ parse_datetime(.x, "%Y-%m-%d %h:%M %p"))
   ) %>%
   mutate(date = as.Date(datetime), .after = datetime) %>%
   arrange(datetime) %>%
   filter(datetime >= "2015-1-1") %>%
-  distinct(station_id, date, .keep_all = T)
+  distinct(fsn, station_id, date, .keep_all = T)
 # ok if NAs were introduced
 
 
 ## Baseline flow ----
 
 flow_in <-
-  read_csv("baseline/WAV_FLOW_2015_Jan24.csv", col_types = list(.default = "c")) %>%
+  list(
+    "baseline/WAV Streamflow 2015-2023.csv",
+    "baseline/WAV Streamflow 2024 v20240813.csv"
+  ) %>%
+  lapply(read_csv, col_types = list(.default = "c")) %>%
+  bind_rows() %>%
   clean_names()
 
 names(flow_in)
 
 flow_obs <- flow_in %>%
   select(
-    fieldwork_seq_no,
+    fsn = fieldwork_seq_no,
     datetime = start_datetime,
     station_id,
     stream_width,
@@ -262,13 +286,12 @@ flow_obs <- flow_in %>%
   ) %>%
   mutate(
     across(datetime, ~ parse_datetime(.x, "%Y-%m-%d %h:%M %p")),
-    across(c(fieldwork_seq_no, station_id), as.integer),
+    across(c(fsn, station_id), as.integer),
     across(stream_width:corrected_streamflow, as.numeric)
   ) %>%
   mutate(date = as.Date(datetime), .after = datetime) %>%
   mutate(streamflow = coalesce(entered_streamflow, corrected_streamflow, calculated_streamflow), .before = entered_streamflow) %>%
-  replace_na(list(flow_method_used = "Not Specified")) %>%
-  distinct(station_id, date, .keep_all = T)
+  distinct(fsn, station_id, date, .keep_all = T)
 # ok if NAs were introduced
 
 
@@ -310,19 +333,19 @@ key_baseline_vars <- c(
 
 # find stations where all FSNs in a year have no baseline data and drop them
 has_key_baseline_data <- baseline_data %>%
-  select(station_id, year, fieldwork_seq_no, all_of(key_baseline_vars)) %>%
+  select(station_id, year, fsn, all_of(key_baseline_vars)) %>%
   pivot_longer(all_of(key_baseline_vars)) %>%
-  summarize(has_baseline = sum(!is.na(value)) > 0, .by = c(station_id, year, fieldwork_seq_no)) %>%
+  summarize(has_baseline = sum(!is.na(value)) > 0, .by = c(station_id, year, fsn)) %>%
   mutate(valid_year = any(has_baseline), .by = c(station_id, year)) %>%
   filter(valid_year)
 
-valid_fieldwork_seq_no <- has_key_baseline_data$fieldwork_seq_no
+valid_fsn <- has_key_baseline_data$fsn
 
 invalid_baseline_data <- baseline_data %>%
-  filter(!(fieldwork_seq_no %in% valid_fieldwork_seq_no))
+  filter(!(fsn %in% valid_fsn))
 
 # message says how many baseline fieldworks will be dropped due to lack of data
-message(nrow(baseline_data) - length(valid_fieldwork_seq_no), " fieldwork events dropped due to having no key baseline data")
+message(nrow(baseline_data) - length(valid_fsn), " fieldwork events dropped due to having no key baseline data")
 
 
 
@@ -331,22 +354,35 @@ baseline_final <- baseline_data %>%
   left_join(stn_list) %>%
   relocate(station_name:longitude, .after = station_id) %>%
   arrange(station_id, date) %>%
-  filter(fieldwork_seq_no %in% valid_fieldwork_seq_no)
+  filter(fsn %in% valid_fsn)
 
-# export
-baseline_final %>% write_csv("~clean/baseline-data.csv")
-baseline_final %>% saveRDS("../WAV Dashboard/data/baseline-data")
+## Export baseline data ----
+{
+  df <- baseline_final
+  fname <- paste0("~clean/baseline-data-", min(df$year), "-", max(df$year))
+  write_csv(df, paste0(fname, ".csv"))
+  saveRDS(df, paste0(fname, ".rds"))
+  message("Save baseline data => ", fname, " (.csv | .rds)")
+  fname <- paste0(DASHBOARD_DIR, "baseline-data.rds")
+  saveRDS(df, fname)
+  message("Update dashboard => ", fname)
+  rm(df, fname)
+}
+
 
 
 
 # 4 => Nutrient data ===========================================================
 
+## From old format ----
+# formatted with months across columns
 tp_data <- list(
-  "nutrient/tp-data-2019.csv",
-  "nutrient/tp-data-2020.csv",
-  "nutrient/tp-data-2021.csv",
-  "nutrient/tp-data-2022.csv",
-  "nutrient/tp-data-2023.csv"
+  "nutrient/WAV Nutrient 2019.csv",
+  "nutrient/WAV Nutrient 2020.csv",
+  "nutrient/WAV Nutrient 2021.csv",
+  "nutrient/WAV Nutrient 2022.csv",
+  "nutrient/WAV Nutrient 2023.csv",
+  "nutrient/WAV Nutrient 2023 GLA TP.csv" # Green Lakes Alliance
 ) %>%
   lapply(read_csv, col_types = cols(.default = "c", station_id = "d", year = "d")) %>%
   bind_rows() %>%
@@ -363,39 +399,68 @@ tp_data <- list(
   mutate(tp = as.numeric(if_else(tp == "ND", "0", tp)))
 # non-detects replaced with zeros for now, need to implement something better later
 
-
-# Milwaukee River Keeper data
-mrk_tp <- read_csv("nutrient/2023 Milwaukee River Keeper total phosphorus.csv") %>%
-  # select total phosphorus, should be all that's in here though
-  filter(DNRParameterCode == 665) %>%
+## From LPDES/SWIMS ----
+# formatted as export from NPDES
+# select total phosphorus parameter 665, should be all that's in here though
+# tp data in units of mg/L = ppm
+tp_data2 <-
+  list(
+    "nutrient/LPDES Nutrient 2023 MRK TP.csv",
+    "nutrient/LPDES Nutrient 2024 TP.csv"
+  ) %>%
+  lapply(read_csv, col_types = list(.default = "c"), na = "ND") %>%
+  lapply(clean_names) %>%
+  bind_rows() %>%
   select(
-    station_id = StationID,
-    volunteer_name = CollectorName,
-    datetime = SampleStartDateTime,
-    tp = ResultValueNo) %>%
+    station_id,
+    volunteer_name = collector_name,
+    datetime = start_date_time,
+    tp = result_value_no
+  ) %>%
   mutate(
+    across(c(station_id, tp), as.numeric),
     across(volunteer_name, str_to_title),
-    datetime = parse_date_time2(datetime, "mdY HMS Op"),
+    datetime = parse_date_time2(datetime, c("mdY HMS Op", "Ymd HM")),
     date = as.Date(datetime),
     year = year(date),
     month = month(date),
-    month_name = month.name[month]) %>%
-  mutate(num_obs = sum(!is.na(tp)), .by = c(year, station_id)) %>%
-  select(-datetime) %>%
-  filter(tp <= 1) # there are 2 anomalous? values
+    month_name = month.name[month]
+  ) %>%
+  mutate(
+    num_obs = sum(!is.na(tp)),
+    .by = c(year, station_id)
+  ) %>%
+  replace_na(list(tp = 0)) %>%
+  select(-datetime)
 
-mrk_tp %>%
-  arrange(desc(tp))
+## Data check ----
+tp_data %>% slice_max(tp, n = 5)
+ggplot(tp_data) + geom_histogram(aes(x = tp)) + scale_x_sqrt()
+
+tp_data2 %>% slice_max(tp, n = 5)
+ggplot(tp_data2) + geom_histogram(aes(x = tp)) + scale_x_sqrt()
+
 
 tp_final <- tp_data %>%
-  bind_rows(mrk_tp) %>%
+  bind_rows(tp_data2) %>%
   left_join(stn_list) %>%
   relocate(station_name, .after = station_id) %>%
-  arrange(station_id, date)
+  arrange(station_id, date) %>%
+  filter(tp < 5) # for now to catch bad data
 
-# export
-tp_final %>% write_csv("~clean/tp-data.csv")
-tp_final %>% saveRDS("../WAV Dashboard/data/tp-data")
+## Export nutrient data ----
+{
+  df <- tp_final
+  fname <- paste0("~clean/tp-data-", min(df$year), "-", max(df$year))
+  write_csv(df, paste0(fname, ".csv"))
+  saveRDS(df, paste0(fname, ".rds"))
+  message("Save thermistor data => ", fname, " (.csv | .rds)")
+  fname <- paste0(DASHBOARD_DIR, "tp-data.rds")
+  saveRDS(df, fname)
+  message("Update dasbhoard => ", fname)
+  rm(df, fname)
+}
+
 
 
 # 5 => Thermistor data =========================================================
@@ -861,25 +926,46 @@ therm_info <- therm_inventory %>%
 
 therm_info %>%
   filter(!have_data) %>%
-  {
-    print(.)
-    write_csv(., "therm/QC/Thermistors - Inventory entries without matching data.csv")
-  }
+  { print(.); write_csv(., "therm/QC/Thermistors - Inventory entries without matching data.csv") }
 
 therm_info_export <- therm_info %>%
   filter(have_data) %>%
-  select(year, logger_sn, device_type, contact_name, date_deployed, date_removed, station_id, station_name, latitude, longitude)
+  select(
+    year,
+    logger_sn,
+    device_type,
+    contact_name,
+    date_deployed,
+    date_removed,
+    station_id,
+    station_name,
+    latitude,
+    longitude
+  )
 
 
-## Export ----
+## Export thermistor data----
 
-# export inventory
-therm_info_export %>% write_csv("~clean/therm-inventory.csv")
-hobo_data %>% write_csv("~clean/therm-data.csv.gz")
+{
+  df <- therm_info_export
+  fname <- paste0("~clean/therm-inventory-", min(df$year), "-", max(df$year), ".csv")
+  write_csv(df, fname)
+  message("Save thermistor inventory => ", fname)
+  fname <- paste0(DASHBOARD_DIR, "therm-inventory.rds")
+  saveRDS(df, fname)
+  message("Update dashboard => ", fname)
 
-# export data to dashboard
-therm_info_export %>% saveRDS("../WAV Dashboard/data/therm-inventory")
-hobo_data %>% saveRDS("../WAV Dashboard/data/therm-data")
+  df <- hobo_data
+  fname <- paste0("~clean/therm-data-", min(df$year), "-", max(df$year))
+  write_csv(df, paste0(fname, ".csv.gz"))
+  saveRDS(df, paste0(fname, ".rds"))
+  message("Save thermistor data => ", fname, " (.csv.gz | .rds)")
+  fname <- paste0(DASHBOARD_DIR, "therm-data.rds")
+  saveRDS(df, fname)
+  message("Update dashboard => ", fname)
+
+  rm(df, fname)
+}
 
 
 
@@ -958,7 +1044,9 @@ stn_list.sf <- stn_list %>%
   ) %>%
   distinct(station_id, .keep_all = T)
 
-# Plot stations
+
+## Plot stations on a map ----
+
 stn_list.sf %>%
   mutate(label = paste0("[", station_id, "] ", station_name)) %>%
   leaflet() %>%
@@ -970,21 +1058,34 @@ stn_list.sf %>%
     label = ~label,
     clusterOptions = markerClusterOptions())
 
-all_stns <- stn_list.sf %>%
-  st_set_geometry(NULL)
+
+## Export station list ----
+
+all_stns <- stn_list.sf %>% st_set_geometry(NULL)
+
+{
+  df <- all_stns
+  fname <- "~clean/station-list"
+  write_csv(df, paste0(fname, ".csv"))
+  saveRDS(df, paste0(fname, ".rds"))
+  message("Saved station list => ", fname, " (.csv | .rds)")
+  fname <- paste0(DASHBOARD_DIR, "station-list.rds")
+  saveRDS(df, fname)
+  message("Update dashboard => ", fname)
+  rm(df, fname)
+}
+
+
+
+
+
+# Misc/Test --------------------------------------------------------------------
 
 # baseline_stns <- all_stns %>%
 #   filter(station_id %in% baseline_data$station_id)
 
 # tp_stns <- all_stns %>%
 #   filter(station_id %in% tp_data$station_id)
-
-all_stns %>% write_csv("~clean/station-list.csv")
-all_stns %>% saveRDS("../WAV Dashboard/data/station-list")
-
-
-
-# Misc/Test --------------------------------------------------------------------
 
 all_stns %>%
   filter(station_id == 223252)
