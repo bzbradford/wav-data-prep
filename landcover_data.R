@@ -106,10 +106,10 @@ landscape_data <- bind_rows(
 # landscape_data <- read_csv("land/landcover.csv.gz")
 {
   nlcd_classes %>% write_csv("~clean/nlcd-classes.csv")
-  nlcd_classes %>% saveRDS("../WAV Dashboard/data/nlcd_classes.rds")
+  nlcd_classes %>% saveRDS(paste0(DASHBOARD_DIR, "nlcd-classes.rds"))
   message("Saved NLCD class list")
   landscape_data %>% write_csv("~clean/nlcd-landcover.csv")
-  landscape_data %>% saveRDS("../WAV Dashboard/data/landcover")
+  landscape_data %>% saveRDS(paste0(DASHBOARD_DIR, "nlcd-landcover.rds"))
   message("Saved NLCD landcover")
 }
 

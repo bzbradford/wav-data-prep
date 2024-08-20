@@ -188,6 +188,7 @@ waterbodies <- read_sf("shp/wi-major-lakes.geojson")
     counties = counties.simp,
     nkes = nkes.simp,
     huc8 = huc8.simp,
+    huc10 = huc10.simp,
     huc12 = huc12.simp,
     dnr_watersheds = dnr_watersheds.simp,
     waterbodies = waterbodies
@@ -446,6 +447,7 @@ tp_final <- tp_data %>%
   left_join(stn_list) %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date) %>%
+  drop_na(tp) %>%
   filter(tp < 5) # for now to catch bad data
 
 ## Export nutrient data ----
@@ -988,11 +990,10 @@ stn_tally_baseline <- baseline_data %>%
 ## Check nutrient ----
 
 # number of nutrient stations
-tp_data %>% count(station_id)
+tp_final %>% count(station_id)
 
 # any nutrient stations missing?
-tp_data %>%
-  drop_na() %>%
+tp_final %>%
   count(station_id) %>%
   filter(!(station_id %in% stn_list$station_id))
 
@@ -1012,7 +1013,7 @@ hobo_data %>%
 
 keep_stns <- sort(unique(c(
   baseline_data$station_id,
-  tp_data$station_id,
+  tp_final$station_id,
   hobo_data$station_id
 ))) %>% na.omit()
 
