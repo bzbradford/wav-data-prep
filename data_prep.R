@@ -2,6 +2,7 @@
 
 
 library(tidyverse)
+library(readxl)
 library(janitor)
 library(lubridate)
 library(sf)
@@ -14,7 +15,7 @@ DASHBOARD_DIR <- "../WAV Dashboard/data/"
 
 # 1 => Load SWIMS Stations =====================================================
 
-stn_list <- read_csv(
+stn_master_list <- read_csv(
   "stations/WAV_stations_Jan24.csv",
   col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
   clean_names() %>%
@@ -211,14 +212,7 @@ waterbodies <- read_sf("shp/wi-major-lakes.geojson")
 
 ## Baseline observations ----
 
-baseline_in <-
-  list(
-    "baseline/WAV Baseline 2015-2023.csv",
-    "baseline/WAV Baseline 2024 v20240813.csv"
-  ) %>%
-  lapply(read_csv, col_types = list(.default = "c")) %>%
-  bind_rows() %>%
-  clean_names()
+baseline_in <- read_excel("baseline/WAV_since2015.xlsx", sheet = 1) %>% clean_names()
 
 names(baseline_in)
 
@@ -227,6 +221,11 @@ baseline_obs <- baseline_in %>%
     fsn = fieldwork_seq_no,
     datetime = start_datetime,
     station_id,
+    station_name = primary_station_name,
+    latitude,
+    longitude,
+    wbic,
+    waterbody = official_waterbody_name,
     station_type_code,
     air_temp = ambient_air_temp,
     air_temp_units = ambient_air_temp_units,
@@ -261,14 +260,7 @@ baseline_obs <- baseline_in %>%
 
 ## Baseline flow ----
 
-flow_in <-
-  list(
-    "baseline/WAV Streamflow 2015-2023.csv",
-    "baseline/WAV Streamflow 2024 v20240813.csv"
-  ) %>%
-  lapply(read_csv, col_types = list(.default = "c")) %>%
-  bind_rows() %>%
-  clean_names()
+flow_in <- read_excel("baseline/wav_FLOW_since2015.xlsx", sheet = 1) %>% clean_names()
 
 names(flow_in)
 
@@ -277,6 +269,12 @@ flow_obs <- flow_in %>%
     fsn = fieldwork_seq_no,
     datetime = start_datetime,
     station_id,
+    station_name = primary_station_name,
+    latitude,
+    longitude,
+    wbic,
+    waterbody = official_waterbody_name,
+    station_type_code,
     stream_width,
     average_stream_depth,
     average_surface_velocity,
@@ -352,8 +350,6 @@ message(nrow(baseline_data) - length(valid_fsn), " fieldwork events dropped due 
 
 ## Final baseline join and filter ----
 baseline_final <- baseline_data %>%
-  left_join(stn_list) %>%
-  relocate(station_name:longitude, .after = station_id) %>%
   arrange(station_id, date) %>%
   filter(fsn %in% valid_fsn)
 
@@ -377,43 +373,43 @@ baseline_final <- baseline_data %>%
 
 ## From old format ----
 # formatted with months across columns
-tp_data <- list(
-  "nutrient/WAV Nutrient 2019.csv",
-  "nutrient/WAV Nutrient 2020.csv",
-  "nutrient/WAV Nutrient 2021.csv",
-  "nutrient/WAV Nutrient 2022.csv",
-  "nutrient/WAV Nutrient 2023.csv",
-  "nutrient/WAV Nutrient 2023 GLA TP.csv" # Green Lakes Alliance
-) %>%
-  lapply(read_csv, col_types = cols(.default = "c", station_id = "d", year = "d")) %>%
-  bind_rows() %>%
-  select(-"station_name") %>%
-  mutate(num_obs = rowSums(!is.na(select(., May:October)))) %>%
-  filter(num_obs > 0) %>%
-  pivot_longer(
-    cols = May:October,
-    names_to = "month_name",
-    values_to = "tp") %>%
-  mutate(month = match(month_name, month.name), .before = "month_name") %>%
-  mutate(date = as.Date(paste(year, month, 15, sep = "-")), .after = "month_name") %>%
-  arrange(year, station_id, date) %>%
-  mutate(tp = as.numeric(if_else(tp == "ND", "0", tp)))
-# non-detects replaced with zeros for now, need to implement something better later
+# tp_data <- list(
+#   "nutrient/WAV Nutrient 2019.csv",
+#   "nutrient/WAV Nutrient 2020.csv",
+#   "nutrient/WAV Nutrient 2021.csv",
+#   "nutrient/WAV Nutrient 2022.csv",
+#   "nutrient/WAV Nutrient 2023.csv",
+#   "nutrient/WAV Nutrient 2023 GLA TP.csv" # Green Lakes Alliance
+# ) %>%
+#   lapply(read_csv, col_types = cols(.default = "c", station_id = "d", year = "d")) %>%
+#   bind_rows() %>%
+#   select(-"station_name") %>%
+#   mutate(num_obs = rowSums(!is.na(select(., May:October)))) %>%
+#   filter(num_obs > 0) %>%
+#   pivot_longer(
+#     cols = May:October,
+#     names_to = "month_name",
+#     values_to = "tp") %>%
+#   mutate(month = match(month_name, month.name), .before = "month_name") %>%
+#   mutate(date = as.Date(paste(year, month, 15, sep = "-")), .after = "month_name") %>%
+#   arrange(year, station_id, date) %>%
+#   mutate(tp = as.numeric(if_else(tp == "ND", "0", tp)))
+# # non-detects replaced with zeros for now, need to implement something better later
 
 ## From LPDES/SWIMS ----
 # formatted as export from NPDES
 # select total phosphorus parameter 665, should be all that's in here though
 # tp data in units of mg/L = ppm
-tp_data2 <-
-  list(
-    "nutrient/LPDES Nutrient 2023 MRK TP.csv",
-    "nutrient/LPDES Nutrient 2024 TP.csv"
-  ) %>%
-  lapply(read_csv, col_types = list(.default = "c"), na = "ND") %>%
-  lapply(clean_names) %>%
-  bind_rows() %>%
+tp_data <-
+  read_excel("nutrient/wav_nutrient_RRC_RKeep_20241105.xlsx", na = c("", "NA", "ND")) %>%
+  clean_names() %>%
   select(
+    fsn = fieldwork_seq_no,
     station_id,
+    station_name = primary_station_name,
+    latitude = calc_ll_lat_dd_amt,
+    longitude = calc_ll_long_dd_amt,
+    station_type_code,
     volunteer_name = collector_name,
     datetime = start_date_time,
     tp = result_value_no
@@ -421,7 +417,6 @@ tp_data2 <-
   mutate(
     across(c(station_id, tp), as.numeric),
     across(volunteer_name, str_to_title),
-    datetime = parse_date_time2(datetime, c("mdY HMS Op", "Ymd HM")),
     date = as.Date(datetime),
     year = year(date),
     month = month(date),
@@ -435,15 +430,13 @@ tp_data2 <-
   select(-datetime)
 
 ## Data check ----
+# tp_data %>% slice_max(tp, n = 5)
+# ggplot(tp_data) + geom_histogram(aes(x = tp)) + scale_x_sqrt()
+
 tp_data %>% slice_max(tp, n = 5)
 ggplot(tp_data) + geom_histogram(aes(x = tp)) + scale_x_sqrt()
 
-tp_data2 %>% slice_max(tp, n = 5)
-ggplot(tp_data2) + geom_histogram(aes(x = tp)) + scale_x_sqrt()
-
-
 tp_final <- tp_data %>%
-  bind_rows(tp_data2) %>%
   left_join(stn_list) %>%
   relocate(station_name, .after = station_id) %>%
   arrange(station_id, date) %>%
@@ -903,17 +896,23 @@ export_hobos(hobos2023)
 
 ## Merge hobodata ----
 
-hobo_data <- bind_rows(
-  hobos2020,
-  hobos2021,
-  hobos2022,
-  hobos2023
-) %>% filter(!is.na(station_id))
+hobo_data <-
+  bind_rows(
+    hobos2020,
+    hobos2021,
+    hobos2022,
+    hobos2023
+  ) %>%
+  filter(!is.na(station_id)) %>%
+  mutate(date_time = force_tz(date_time, "America/Chicago")) %>%
+  mutate(hour = hour(date_time), .after = day)
 
 # loggers per year
 hobo_data %>%
   count(logger_sn, year) %>%
   count(year)
+
+tz(hobo_data$date_time[1])
 
 # Collect list of SNs by year
 hobo_serials <- hobo_data %>%
@@ -973,17 +972,32 @@ therm_info_export <- therm_info %>%
 
 # 6 => Finalize station list ===================================================
 
+# generate station list
+
+baseline_stns <- baseline_final %>%
+  distinct(station_id, station_name, wbic, waterbody, latitude, longitude, station_type_code)
+
+nutrient_stns <- tp_final %>%
+  distinct(station_id, station_name, wbic, waterbody, latitude, longitude)
+
+stn_list <- bind_rows(stn_master_list, baseline_stns, nutrient_stns) %>%
+  drop_na(station_id, latitude, longitude) %>%
+  distinct(station_id, .keep_all = T) %>%
+  arrange(station_id) %>%
+  mutate(station_name = str_squish(str_replace_all(station_name, "[^[:alnum:][:punct:] ]", "")))
+
+
 ## Check baseline ----
 
 # number of baseline stations
-baseline_data %>% count(station_id)
+baseline_final %>% count(station_id)
 
 # any baseline stations missing from list?
-baseline_data %>%
+baseline_final %>%
   count(station_id) %>%
   filter(!(station_id %in% stn_list$station_id))
 
-stn_tally_baseline <- baseline_data %>%
+stn_tally_baseline <- baseline_final %>%
   group_by(station_id) %>%
   count()
 
