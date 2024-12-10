@@ -15,17 +15,22 @@ DASHBOARD_DIR <- "../WAV Dashboard/data/"
 
 # 1 => Load SWIMS Stations =====================================================
 
-stn_master_list <- read_csv(
-  "stations/WAV_stations_Jan24.csv",
-  col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")) %>%
+stn_master_list <-
+  read_csv(
+    "stations/WAV_stations_Jan24.csv",
+    col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")
+  ) %>%
   clean_names() %>%
   select(
     station_id,
     station_name = primary_station_name,
+    latitude,
+    longitude,
     wbic,
     waterbody = official_waterbody_name,
-    latitude,
-    longitude) %>%
+    station_type_code
+  ) %>%
+  bind_rows(read_csv("stations/extra-stations.csv")) %>%
   mutate(station_name = str_squish(str_replace_all(station_name, "[^[:alnum:][:punct:] ]", ""))) %>%
   distinct(station_id, .keep_all = T) %>%
   arrange(station_id) %>%
@@ -371,37 +376,12 @@ baseline_final <- baseline_data %>%
 
 # 4 => Nutrient data ===========================================================
 
-## From old format ----
-# formatted with months across columns
-# tp_data <- list(
-#   "nutrient/WAV Nutrient 2019.csv",
-#   "nutrient/WAV Nutrient 2020.csv",
-#   "nutrient/WAV Nutrient 2021.csv",
-#   "nutrient/WAV Nutrient 2022.csv",
-#   "nutrient/WAV Nutrient 2023.csv",
-#   "nutrient/WAV Nutrient 2023 GLA TP.csv" # Green Lakes Alliance
-# ) %>%
-#   lapply(read_csv, col_types = cols(.default = "c", station_id = "d", year = "d")) %>%
-#   bind_rows() %>%
-#   select(-"station_name") %>%
-#   mutate(num_obs = rowSums(!is.na(select(., May:October)))) %>%
-#   filter(num_obs > 0) %>%
-#   pivot_longer(
-#     cols = May:October,
-#     names_to = "month_name",
-#     values_to = "tp") %>%
-#   mutate(month = match(month_name, month.name), .before = "month_name") %>%
-#   mutate(date = as.Date(paste(year, month, 15, sep = "-")), .after = "month_name") %>%
-#   arrange(year, station_id, date) %>%
-#   mutate(tp = as.numeric(if_else(tp == "ND", "0", tp)))
-# # non-detects replaced with zeros for now, need to implement something better later
-
 ## From LPDES/SWIMS ----
 # formatted as export from NPDES
 # select total phosphorus parameter 665, should be all that's in here though
 # tp data in units of mg/L = ppm
 tp_data <-
-  read_excel("nutrient/wav_nutrient_RRC_RKeep_20241105.xlsx", na = c("", "NA", "ND")) %>%
+  read_excel("nutrient/wav_nutrient_RRC_RKeep_20241106.xlsx", na = c("", "NA", "ND")) %>%
   clean_names() %>%
   select(
     fsn = fieldwork_seq_no,
@@ -409,6 +389,8 @@ tp_data <-
     station_name = primary_station_name,
     latitude = calc_ll_lat_dd_amt,
     longitude = calc_ll_long_dd_amt,
+    wbic,
+    waterbody = official_waterbody_name,
     station_type_code,
     volunteer_name = collector_name,
     datetime = start_date_time,
@@ -437,8 +419,6 @@ tp_data %>% slice_max(tp, n = 5)
 ggplot(tp_data) + geom_histogram(aes(x = tp)) + scale_x_sqrt()
 
 tp_final <- tp_data %>%
-  left_join(stn_list) %>%
-  relocate(station_name, .after = station_id) %>%
   arrange(station_id, date) %>%
   drop_na(tp) %>%
   filter(tp < 5) # for now to catch bad data
@@ -542,10 +522,11 @@ parse_hobos <- function(dir, yr) {
     if (length(unique(data$Year)) > 1) {
       before <- nrow(data)
       years <- paste(sort(unique(data$Year)), collapse = ", ")
-      data <- filter(data, Year == yr)
-      after <- nrow(data)
+      # data <- filter(data, Year == yr)
+      # after <- nrow(data)
+      after <- filter(data, Year == yr) %>% nrow()
       warn(sn, paste("Multiple years in data range: ", years))
-      warn(sn, paste("Removed", before - after, "values from the wrong year."))
+      warn(sn, paste("Note: ", before - after, "values are not from the inventory year."))
     }
 
     if (!all(data$TempOK)) {
@@ -569,7 +550,7 @@ parse_hobos <- function(dir, yr) {
 
   bind_rows(raw_data) %>%
     clean_names() %>%
-    filter(year == yr)
+    mutate(inventory_year = yr)
 }
 
 
@@ -591,7 +572,8 @@ clean_hobos <- function(hobodata, return_status = FALSE) {
       .by = logger_sn)
 
   cleaned <- hobodata %>%
-    left_join(therm_inventory, join_by(logger_sn, year)) %>%
+    left_join(therm_inventory, join_by(logger_sn, inventory_year == year)) %>%
+    select(-inventory_year) %>%
     mutate(
       after_deployed = if_else(!is.na(date_deployed), date > date_deployed, TRUE),
       before_removed = if_else(!is.na(date_removed), date < date_removed, TRUE)
@@ -819,8 +801,7 @@ getAgWxData <- function(url) {
 }
 
 # saves all the hobo files individually for SWIMS upload
-export_hobos <- function(clean_data, logger_serials = unique(clean_data$logger_sn), out_dir = "~clean/hobodata") {
-  yr <- clean_data$year[1]
+export_hobos <- function(clean_data, yr = clean_data$year[1], logger_serials = unique(clean_data$logger_sn), out_dir = "~clean/hobodata") {
   out_dir <- file.path(out_dir, yr)
   dir.create(out_dir, showWarnings = F)
   for (sn in logger_serials) {
@@ -851,12 +832,17 @@ hobos2021_parsed <- parse_hobos("therm/hobodata/2021", 2021)
 hobos2022_parsed <- parse_hobos("therm/hobodata/2022", 2022)
 hobos2023_parsed <- parse_hobos("therm/hobodata/2023", 2023)
 hobos2023_mrk_parsed <- parse_hobos("therm/hobodata/2023_mrk", 2023)
+hobos2024_parsed <- parse_hobos("therm/hobodata/2024", 2024)
+
+# these two hobos were found, having been deployed for multiple years
+# looks like they recorded through 2022
+hobos2024_extra_parsed <- parse_hobos("therm/hobodata/2024_extra", 2024)
 
 # Load thermistor inventory, matching SNs with WAV Stns
 # update the inventory with correct deploy/retrieve dates
 # then re-run the cleaning
 therm_inventory <- read_csv("therm/combined-hobo-inventory.csv") %>%
-  left_join(select(stn_list, station_id, station_name, latitude, longitude), join_by(station_id))
+  left_join(select(stn_master_list, station_id, station_name, latitude, longitude), join_by(station_id))
 
 # clean the hobo data using the deployment dates in the inventory
 hobos2020 <- clean_hobos(hobos2020_parsed)
@@ -864,6 +850,8 @@ hobos2021 <- clean_hobos(hobos2021_parsed)
 hobos2022 <- clean_hobos(hobos2022_parsed)
 hobos2023_wav <- clean_hobos(hobos2023_parsed)
 hobos2023_mrk <- clean_hobos(hobos2023_mrk_parsed)
+hobos2024_main <- clean_hobos(hobos2024_parsed)
+hobos2024_extra <- clean_hobos(hobos2024_extra_parsed)
 
 # generate interactive charts to inspect the data and compare to air temperatures
 # currently no way to easily trim internal dates when a logger becomes exposed to the air
@@ -874,6 +862,8 @@ inspect_hobos(hobos2021)
 inspect_hobos(hobos2022)
 inspect_hobos(hobos2023_wav)
 inspect_hobos(hobos2023_mrk)
+inspect_hobos(hobos2024)
+inspect_hobos(hobos2024_extra)
 
 # merge WAV and MRK hobo data
 hobos2023 <-
@@ -881,17 +871,21 @@ hobos2023 <-
   # exclude logger(s) with very dubious data
   filter(!(logger_sn %in% c(20820405)))
 
+hobos2024 <- bind_rows(hobos2024_main, hobos2024_extra)
+
 # save these cleaned datasets
 hobos2020 %>% write_csv("~clean/hobodata/hobos-cleaned-2020.csv.gz")
 hobos2021 %>% write_csv("~clean/hobodata/hobos-cleaned-2021.csv.gz")
 hobos2022 %>% write_csv("~clean/hobodata/hobos-cleaned-2022.csv.gz")
 hobos2023 %>% write_csv("~clean/hobodata/hobos-cleaned-2023.csv.gz")
+hobos2024 %>% write_csv("~clean/hobodata/hobos-cleaned-2024.csv.gz")
 
 # export individual CSVs
-export_hobos(hobos2020)
-export_hobos(hobos2021)
-export_hobos(hobos2022)
-export_hobos(hobos2023)
+export_hobos(hobos2020, 2020)
+export_hobos(hobos2021, 2021)
+export_hobos(hobos2022, 2022)
+export_hobos(hobos2023, 2023)
+export_hobos(hobos2024, 2024)
 
 
 ## Merge hobodata ----
@@ -901,7 +895,8 @@ hobo_data <-
     hobos2020,
     hobos2021,
     hobos2022,
-    hobos2023
+    hobos2023,
+    hobos2024
   ) %>%
   filter(!is.na(station_id)) %>%
   mutate(date_time = force_tz(date_time, "America/Chicago")) %>%
@@ -972,15 +967,20 @@ therm_info_export <- therm_info %>%
 
 # 6 => Finalize station list ===================================================
 
-# generate station list
+stn_attrib_cols <- c("station_id", "station_name", "latitude", "longitude", "wbic", "waterbody", "station_type_code")
 
+# generate station lists
 baseline_stns <- baseline_final %>%
-  distinct(station_id, station_name, wbic, waterbody, latitude, longitude, station_type_code)
-
+  distinct(across(any_of(stn_attrib_cols))) %>%
+  arrange(station_id)
 nutrient_stns <- tp_final %>%
-  distinct(station_id, station_name, wbic, waterbody, latitude, longitude)
-
-stn_list <- bind_rows(stn_master_list, baseline_stns, nutrient_stns) %>%
+  distinct(across(any_of(stn_attrib_cols))) %>%
+  arrange(station_id)
+therm_stns <- therm_inventory %>%
+  distinct(across(any_of(stn_attrib_cols))) %>%
+  arrange(station_id) %>%
+  drop_na()
+stn_list <- bind_rows(stn_master_list, baseline_stns, nutrient_stns, therm_stns) %>%
   drop_na(station_id, latitude, longitude) %>%
   distinct(station_id, .keep_all = T) %>%
   arrange(station_id) %>%
@@ -992,14 +992,16 @@ stn_list <- bind_rows(stn_master_list, baseline_stns, nutrient_stns) %>%
 # number of baseline stations
 baseline_final %>% count(station_id)
 
+# count of fieldwork by station
+stn_tally_baseline <- baseline_final %>%
+  count(across(any_of(stn_attrib_cols))) %>%
+  arrange(desc(n))
+
 # any baseline stations missing from list?
-baseline_final %>%
-  count(station_id) %>%
+stn_tally_baseline %>%
   filter(!(station_id %in% stn_list$station_id))
 
-stn_tally_baseline <- baseline_final %>%
-  group_by(station_id) %>%
-  count()
+
 
 ## Check nutrient ----
 
