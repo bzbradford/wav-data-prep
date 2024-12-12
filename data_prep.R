@@ -954,9 +954,10 @@ therm_info_export <- therm_info %>%
 
 {
   df <- therm_info_export
-  fname <- paste0("~clean/therm-inventory-", min(df$year), "-", max(df$year), ".csv")
-  write_csv(df, fname)
-  message("Save thermistor inventory => ", fname)
+  fname <- paste0("~clean/therm-inventory-", min(df$year), "-", max(df$year))
+  write_csv(df, paste0(fname, ".csv"))
+  saveRDS(df, paste0(fname, ".rds"))
+  message("Save thermistor inventory => ", fname, " (.csv | .rds)")
   fname <- paste0(DASHBOARD_DIR, "therm-inventory.rds")
   saveRDS(df, fname)
   message("Update dashboard => ", fname)
