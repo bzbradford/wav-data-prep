@@ -217,7 +217,7 @@ waterbodies <- read_sf("shp/wi-major-lakes.geojson")
 
 ## Baseline observations ----
 
-baseline_in <- read_excel("baseline/WAV_since2015.xlsx", sheet = 1) %>% clean_names()
+baseline_in <- read_excel("baseline/WAV_base2015_20241211.xlsx", sheet = 1) %>% clean_names()
 
 names(baseline_in)
 
@@ -265,7 +265,7 @@ baseline_obs <- baseline_in %>%
 
 ## Baseline flow ----
 
-flow_in <- read_excel("baseline/wav_FLOW_since2015.xlsx", sheet = 1) %>% clean_names()
+flow_in <- read_excel("baseline/WAV_flow2015_20241211.xlsx", sheet = 1) %>% clean_names()
 
 names(flow_in)
 
@@ -381,7 +381,7 @@ baseline_final <- baseline_data %>%
 # select total phosphorus parameter 665, should be all that's in here though
 # tp data in units of mg/L = ppm
 tp_data <-
-  read_excel("nutrient/wav_nutrient_RRC_RKeep_20241106.xlsx", na = c("", "NA", "ND")) %>%
+  read_excel("nutrient/wav_nutrient_RRC_RKeep_20241210.xlsx", na = c("", "NA", "ND")) %>%
   clean_names() %>%
   select(
     fsn = fieldwork_seq_no,
@@ -441,7 +441,7 @@ tp_final <- tp_data %>%
 # 5 => Thermistor data =========================================================
 
 # reads in all raw hobo data csv files and parses them
-parse_hobos <- function(dir, yr) {
+read_hobos <- function(dir, yr) {
   require(tidyverse)
   require(lubridate)
   require(janitor)
@@ -548,9 +548,11 @@ parse_hobos <- function(dir, yr) {
   cat("\n")
   lapply(errors, function(err) message(err))
 
-  bind_rows(raw_data) %>%
+  clean_data <- bind_rows(raw_data) %>%
     clean_names() %>%
     mutate(inventory_year = yr)
+  attr(clean_data, "spec") <- NULL
+  clean_data
 }
 
 
@@ -631,15 +633,20 @@ clean_hobos <- function(hobodata, return_status = FALSE) {
 
 # plotly showing temperature readout for a logger
 # adds weather data behind to compare and look for anomalies
-makeThermistorPlot <- function(df_hourly, weather = NULL) {
+make_thermistor_plot <- function(df_hourly, weather = NULL) {
   require(dplyr)
   require(plotly)
 
-  title <- with(first(df_hourly), paste(
+  opts <- as.list(first(df_hourly))
+  title <- with(opts, paste(
     "Year:", year, "|",
     "Logger SN:", logger_sn, "|",
     "Station ID:", station_id, "|",
     "Coords:", paste0(latitude, ", ", longitude)
+  ))
+  img_name <- with(opts, paste0(
+    year, " thermistors - SN ", logger_sn, " - Stn ", station_id,
+    sprintf(" (%.4f, %.4f)", latitude, longitude)
   ))
 
   # make sure daily values time is aligned to noon
@@ -756,7 +763,18 @@ makeThermistorPlot <- function(df_hourly, weather = NULL) {
         y = 1),
       margin = list(t = 50)
     ) %>%
-    config(displayModeBar = F) %>%
+    config(
+      displayModeBar = TRUE,
+      displaylogo = FALSE,
+      modeBarButtons = list(list("toImage")),
+      toImageButtonOptions = list(
+        format = "png",
+        filename = img_name,
+        height = 500,
+        width = 1000,
+        scale = 1.25
+      )
+    ) %>%
     hide_colorbar()
 }
 
@@ -771,9 +789,9 @@ inspect_hobos <- function(hobodata, serials = sort(unique(hobodata$logger_sn))) 
     message("Logger ", i, "/", n, ": SN ", sn)
     hobo <- hobodata %>% filter(logger_sn == sn)
     info <- last(hobo)
-    url <- buildAgWxURL(hobo)
-    weather <- getAgWxData(url)
-    makeThermistorPlot(hobo, weather) %>% print()
+    url <- build_agweather_url(hobo)
+    weather <- get_agweather_data(url)
+    make_thermistor_plot(hobo, weather) %>% print()
     if (n == 1 || i == n) break
     resp <- readline("[Enter] for next, q to quit > ")
     if (resp != "") break
@@ -781,17 +799,17 @@ inspect_hobos <- function(hobodata, serials = sort(unique(hobodata$logger_sn))) 
 }
 
 # create a URL to get weather data from AgWeather
-buildAgWxURL <- function(df) {
+build_agweather_url <- function(df) {
   lat = df$latitude[1]
   lng = df$longitude[1]
   start_date = min(df$date)
   end_date = max(df$date)
   if (any(is.na(c(lat, lng, start_date, end_date)))) return(NULL)
-  glue::glue("https://agweather.cals.wisc.edu/ag_weather/weather?lat={lat}&long={lng}&start_date={start_date}&end_date={end_date}")
+  glue::glue("https://agweather.cals.wisc.edu/api/weather?lat={lat}&long={lng}&start_date={start_date}&end_date={end_date}")
 }
 
 # pulls and formats weather data from AgWeather
-getAgWxData <- function(url) {
+get_agweather_data <- function(url) {
   if (is.null(url)) return(NULL)
   httr::GET(url) %>%
     httr::content() %>%
@@ -819,6 +837,13 @@ export_hobos <- function(clean_data, yr = clean_data$year[1], logger_serials = u
 
 ## Read and check Hobo data ----
 
+# Load thermistor inventory, matching SNs with WAV Stns
+# update the inventory with correct deploy/retrieve dates
+# then re-run the cleaning
+therm_inventory <- read_csv("therm/combined-hobo-inventory.csv") %>%
+  left_join(select(stn_master_list, station_id, station_name, latitude, longitude), join_by(station_id))
+
+
 #' File format expectations:
 #' - Row 1 may be skipped, often contained 'plot title' or other heading.
 #' - Obs # in column 1
@@ -826,78 +851,63 @@ export_hobos <- function(clean_data, yr = clean_data$year[1], logger_serials = u
 #' - Temperature in column 3
 #'   - Units must be specified in column name
 
-# Read in raw hobo csv files
-hobos2020_parsed <- parse_hobos("therm/hobodata/2020", 2020)
-hobos2021_parsed <- parse_hobos("therm/hobodata/2021", 2021)
-hobos2022_parsed <- parse_hobos("therm/hobodata/2022", 2022)
-hobos2023_parsed <- parse_hobos("therm/hobodata/2023", 2023)
-hobos2023_mrk_parsed <- parse_hobos("therm/hobodata/2023_mrk", 2023)
-hobos2024_parsed <- parse_hobos("therm/hobodata/2024", 2024)
-
+# Read in raw hobo csv files. Indicate inventory year
+hobos_in_2021 <- read_hobos("therm/hobodata/2020", 2020)
+hobos_in_2021 <- read_hobos("therm/hobodata/2021", 2021)
+hobos_in_2022 <- read_hobos("therm/hobodata/2022", 2022)
+hobos_in_2023 <- read_hobos("therm/hobodata/2023", 2023)
+hobos_in_2023_mrk <- read_hobos("therm/hobodata/2023_mrk", 2023)
+hobos_in_2024 <- read_hobos("therm/hobodata/2024", 2024)
 # these two hobos were found, having been deployed for multiple years
-# looks like they recorded through 2022
-hobos2024_extra_parsed <- parse_hobos("therm/hobodata/2024_extra", 2024)
-
-# Load thermistor inventory, matching SNs with WAV Stns
-# update the inventory with correct deploy/retrieve dates
-# then re-run the cleaning
-therm_inventory <- read_csv("therm/combined-hobo-inventory.csv") %>%
-  left_join(select(stn_master_list, station_id, station_name, latitude, longitude), join_by(station_id))
+hobos_in_2024_extra <- read_hobos("therm/hobodata/2024_extra", 2024)
+hobos_in_2024_mrk <- read_hobos("therm/hobodata/2024_mrk", 2024)
 
 # clean the hobo data using the deployment dates in the inventory
-hobos2020 <- clean_hobos(hobos2020_parsed)
-hobos2021 <- clean_hobos(hobos2021_parsed)
-hobos2022 <- clean_hobos(hobos2022_parsed)
-hobos2023_wav <- clean_hobos(hobos2023_parsed)
-hobos2023_mrk <- clean_hobos(hobos2023_mrk_parsed)
-hobos2024_main <- clean_hobos(hobos2024_parsed)
-hobos2024_extra <- clean_hobos(hobos2024_extra_parsed)
+hobos_2020 <- clean_hobos(hobos_in_2020)
+hobos_2021 <- clean_hobos(hobos_in_2021)
+hobos_2022 <- clean_hobos(hobos_in_2022)
+hobos_2023_wav <- clean_hobos(hobos_in_2023)
+hobos_2023_mrk <- clean_hobos(hobos_in_2023_mrk)
+hobos_2024_wav <- clean_hobos(hobos_in_2024)
+hobos_2024_extra <- clean_hobos(hobos_in_2024_extra)
+hobos_2024_mrk <- clean_hobos(hobos_in_2024_mrk)
+
 
 # generate interactive charts to inspect the data and compare to air temperatures
 # currently no way to easily trim internal dates when a logger becomes exposed to the air
 # can use this to confirm deployment and retrieval dates
 # update dates in the inventory file if desired, then re-run the cleaning
-inspect_hobos(hobos2020)
-inspect_hobos(hobos2021)
-inspect_hobos(hobos2022)
-inspect_hobos(hobos2023_wav)
-inspect_hobos(hobos2023_mrk)
-inspect_hobos(hobos2024)
-inspect_hobos(hobos2024_extra)
+inspect_hobos(hobos_2020)
+inspect_hobos(hobos_2021)
+inspect_hobos(hobos_2022)
+inspect_hobos(hobos_2023_wav)
+inspect_hobos(hobos_2023_mrk)
+inspect_hobos(hobos_2024_wav)
+inspect_hobos(hobos_2024_extra)
+inspect_hobos(hobos_2024_mrk)
 
-# merge WAV and MRK hobo data
-hobos2023 <-
-  bind_rows(hobos2023_wav, hobos2023_mrk) %>%
-  # exclude logger(s) with very dubious data
-  filter(!(logger_sn %in% c(20820405)))
-
-hobos2024 <- bind_rows(hobos2024_main, hobos2024_extra)
+# merge sets, exclude logger(s) with very dubious data
+hobos_2023 <- bind_rows(hobos_2023_wav, hobos_2023_mrk) %>% filter(!(logger_sn %in% c(20820405)))
+hobos_2024 <- bind_rows(hobos_2024_wav, hobos_2024_extra, hobos_2024_mrk)
 
 # save these cleaned datasets
-hobos2020 %>% write_csv("~clean/hobodata/hobos-cleaned-2020.csv.gz")
-hobos2021 %>% write_csv("~clean/hobodata/hobos-cleaned-2021.csv.gz")
-hobos2022 %>% write_csv("~clean/hobodata/hobos-cleaned-2022.csv.gz")
-hobos2023 %>% write_csv("~clean/hobodata/hobos-cleaned-2023.csv.gz")
-hobos2024 %>% write_csv("~clean/hobodata/hobos-cleaned-2024.csv.gz")
+hobos_2020 %>% write_csv("~clean/hobodata/hobos-cleaned-2020.csv.gz")
+hobos_2021 %>% write_csv("~clean/hobodata/hobos-cleaned-2021.csv.gz")
+hobos_2022 %>% write_csv("~clean/hobodata/hobos-cleaned-2022.csv.gz")
+hobos_2023 %>% write_csv("~clean/hobodata/hobos-cleaned-2023.csv.gz")
+hobos_2024 %>% write_csv("~clean/hobodata/hobos-cleaned-2024.csv.gz")
 
-# export individual CSVs
-export_hobos(hobos2020, 2020)
-export_hobos(hobos2021, 2021)
-export_hobos(hobos2022, 2022)
-export_hobos(hobos2023, 2023)
-export_hobos(hobos2024, 2024)
+# export individual CSVs, indicate output year folder
+export_hobos(hobos_2020, 2020)
+export_hobos(hobos_2021, 2021)
+export_hobos(hobos_2022, 2022)
+export_hobos(hobos_2023, 2023)
+export_hobos(hobos_2024, 2024)
 
 
 ## Merge hobodata ----
 
-hobo_data <-
-  bind_rows(
-    hobos2020,
-    hobos2021,
-    hobos2022,
-    hobos2023,
-    hobos2024
-  ) %>%
+hobo_data <- bind_rows(hobos_2020, hobos_2021, hobos_2022, hobos_2023, hobos_2024) %>%
   filter(!is.na(station_id)) %>%
   mutate(date_time = force_tz(date_time, "America/Chicago")) %>%
   mutate(hour = hour(date_time), .after = day)
