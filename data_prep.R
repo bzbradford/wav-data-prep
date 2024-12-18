@@ -12,13 +12,14 @@ library(rmapshaper) # ms_simplify
 
 
 DASHBOARD_DIR <- "../WAV Dashboard/data/"
+EXPORT_DIRS <- c("~clean", "G:/Shared drives/Water Action Volunteers (WAV)/Data/Cleaned Dashboard Datasets")
 
 # 1 => Load SWIMS Stations =====================================================
 
 stn_master_list <-
   read_csv(
     "stations/WAV_stations_Jan24.csv",
-    col_types = list(.default = "c", STATION_ID = "d", LATITUDE = "d", LONGITUDE = "d")
+    col_types = list(.default = "c", STATION_ID = "d", WBIC = "d", LATITUDE = "d", LONGITUDE = "d")
   ) %>%
   clean_names() %>%
   select(
@@ -254,7 +255,7 @@ baseline_obs <- baseline_in %>%
     across(c(weather_last_2_days, additional_comments, fieldwork_comments), ~ str_to_sentence(str_squish(.x))),
     weather_conditions = str_to_sentence(gsub("_", " ", weather_conditions)),
     across(c(fsn, station_id), as.integer),
-    across(datetime, ~ parse_datetime(.x, "%Y-%m-%d %h:%M %p"))
+    across(datetime, ~ parse_date_time(.x, "ymdHMp"))
   ) %>%
   mutate(date = as.Date(datetime), .after = datetime) %>%
   arrange(datetime) %>%
@@ -289,7 +290,7 @@ flow_obs <- flow_in %>%
     flow_method_used
   ) %>%
   mutate(
-    across(datetime, ~ parse_datetime(.x, "%Y-%m-%d %h:%M %p")),
+    across(datetime, ~ parse_date_time(.x, "ymdHMp")),
     across(c(fsn, station_id), as.integer),
     across(stream_width:corrected_streamflow, as.numeric)
   ) %>%
@@ -359,18 +360,22 @@ baseline_final <- baseline_data %>%
   filter(fsn %in% valid_fsn)
 
 ## Export baseline data ----
-{
+export_baseline <- function() {
   df <- baseline_final
-  fname <- paste0("~clean/baseline-data-", min(df$year), "-", max(df$year))
-  write_csv(df, paste0(fname, ".csv"))
-  saveRDS(df, paste0(fname, ".rds"))
-  message("Save baseline data => ", fname, " (.csv | .rds)")
+
+  lapply(EXPORT_DIRS, function(dir) {
+    fname <- paste0(dir, "/baseline-data-", min(df$year), "-", max(df$year))
+    write_csv(df, paste0(fname, ".csv"))
+    saveRDS(df, paste0(fname, ".rds"))
+    message("Save baseline data => ", fname, " (.csv | .rds)")
+  })
+
   fname <- paste0(DASHBOARD_DIR, "baseline-data.rds")
   saveRDS(df, fname)
   message("Update dashboard => ", fname)
-  rm(df, fname)
 }
 
+export_baseline()
 
 
 
@@ -380,8 +385,8 @@ baseline_final <- baseline_data %>%
 # formatted as export from NPDES
 # select total phosphorus parameter 665, should be all that's in here though
 # tp data in units of mg/L = ppm
-tp_data <-
-  read_excel("nutrient/wav_nutrient_RRC_RKeep_20241210.xlsx", na = c("", "NA", "ND")) %>%
+tp_data_wav <-
+  read_excel("nutrient/wav_nutrient_RRC_RKeep_20241210.xlsx", na = c("", "NA")) %>%
   clean_names() %>%
   select(
     fsn = fieldwork_seq_no,
@@ -396,20 +401,50 @@ tp_data <-
     datetime = start_date_time,
     tp = result_value_no
   ) %>%
+  drop_na(tp) %>%
   mutate(
+    tp = gsub("ND", 0, tp),
     across(c(station_id, tp), as.numeric),
     across(volunteer_name, str_to_title),
     date = as.Date(datetime),
     year = year(date),
     month = month(date),
     month_name = month.name[month]
+  )
+
+# MRK 2024 data
+tp_data_mrk <-
+  read_excel("nutrient/MilwaukeeRiverkeeper_TP_2024.xlsx", na = c("", "NA")) %>%
+  clean_names() %>%
+  select(
+    datetime = sample_start_date_time,
+    station_id,
+    volunteer_name = collector_name,
+    tp = result_value_no
   ) %>%
+  drop_na(tp) %>%
+  mutate(
+    tp = gsub("ND", 0, tp),
+    across(c(station_id, tp), as.numeric),
+    across(volunteer_name, str_to_title),
+    datetime = parse_date_time(datetime, "mdyHMSp"),
+    date = as.Date(datetime),
+    year = year(date),
+    month = month(date),
+    month_name = month.name[month]
+  ) %>%
+  left_join(stn_master_list)
+
+# merge and strip dupes
+tp_data <- bind_rows(
+  tp_data_wav,
+  tp_data_mrk %>% select(any_of(names(tp_data_wav)))
+) %>%
+  distinct(station_id, datetime, tp, .keep_all = TRUE) %>%
   mutate(
     num_obs = sum(!is.na(tp)),
     .by = c(year, station_id)
-  ) %>%
-  replace_na(list(tp = 0)) %>%
-  select(-datetime)
+  )
 
 ## Data check ----
 # tp_data %>% slice_max(tp, n = 5)
@@ -419,23 +454,27 @@ tp_data %>% slice_max(tp, n = 5)
 ggplot(tp_data) + geom_histogram(aes(x = tp)) + scale_x_sqrt()
 
 tp_final <- tp_data %>%
+  select(-datetime) %>%
   arrange(station_id, date) %>%
-  drop_na(tp) %>%
   filter(tp < 5) # for now to catch bad data
 
 ## Export nutrient data ----
-{
+export_nutrient <- function() {
   df <- tp_final
-  fname <- paste0("~clean/tp-data-", min(df$year), "-", max(df$year))
-  write_csv(df, paste0(fname, ".csv"))
-  saveRDS(df, paste0(fname, ".rds"))
-  message("Save thermistor data => ", fname, " (.csv | .rds)")
+
+  lapply(EXPORT_DIRS, function(dir) {
+    fname <- paste0(dir, "/tp-data-", min(df$year), "-", max(df$year))
+    message("Save thermistor data => ", fname, " (.csv | .rds)")
+    write_csv(df, paste0(fname, ".csv"))
+    saveRDS(df, paste0(fname, ".rds"))
+  })
+
   fname <- paste0(DASHBOARD_DIR, "tp-data.rds")
-  saveRDS(df, fname)
   message("Update dasbhoard => ", fname)
-  rm(df, fname)
+  saveRDS(df, fname)
 }
 
+export_nutrient()
 
 
 # 5 => Thermistor data =========================================================
@@ -583,11 +622,12 @@ clean_hobos <- function(hobodata, return_status = FALSE) {
     filter(!is.na(station_id) & after_deployed & before_removed) %>%
     select(-c(after_deployed, before_removed)) %>%
     mutate(
-      month = lubridate::month(date),
-      day = lubridate::day(date),
-      yday = lubridate::yday(date),
-      # date_time = force_tz(date_time, tzone = "America/Chicago"),
-      .after = year) %>%
+      month = month(date),
+      day = day(date),
+      hour = hour(date_time),
+      yday = yday(date),
+      .after = year
+    ) %>%
     arrange(logger_sn, date_time)
 
   print(cleaned)
@@ -882,7 +922,7 @@ inspect_hobos(hobos_2021)
 inspect_hobos(hobos_2022)
 inspect_hobos(hobos_2023_wav)
 inspect_hobos(hobos_2023_mrk)
-inspect_hobos(hobos_2024_wav)
+inspect_hobos(hobos_2024_wav, 20361490)
 inspect_hobos(hobos_2024_extra)
 inspect_hobos(hobos_2024_mrk)
 
@@ -902,14 +942,13 @@ export_hobos(hobos_2020, 2020)
 export_hobos(hobos_2021, 2021)
 export_hobos(hobos_2022, 2022)
 export_hobos(hobos_2023, 2023)
-export_hobos(hobos_2024, 2024)
+export_hobos(hobos_2024, 2024, logger_serials = 20361490)
 
 
 ## Merge hobodata ----
 
 hobo_data <- bind_rows(hobos_2020, hobos_2021, hobos_2022, hobos_2023, hobos_2024) %>%
   filter(!is.na(station_id)) %>%
-  mutate(date_time = force_tz(date_time, "America/Chicago")) %>%
   mutate(hour = hour(date_time), .after = day)
 
 # loggers per year
@@ -952,27 +991,35 @@ therm_info_export <- therm_info %>%
 
 ## Export thermistor data----
 
-{
+export_therm <- function() {
   df <- therm_info_export
-  fname <- paste0("~clean/therm-inventory-", min(df$year), "-", max(df$year))
-  write_csv(df, paste0(fname, ".csv"))
-  saveRDS(df, paste0(fname, ".rds"))
-  message("Save thermistor inventory => ", fname, " (.csv | .rds)")
+
+  lapply(EXPORT_DIRS, function(dir) {
+    fname <- paste0(dir, "/therm-inventory-", min(df$year), "-", max(df$year))
+    message("Save thermistor inventory => ", fname, " (.csv | .rds)")
+    write_csv(df, paste0(fname, ".csv"))
+    saveRDS(df, paste0(fname, ".rds"))
+  })
+
   fname <- paste0(DASHBOARD_DIR, "therm-inventory.rds")
-  saveRDS(df, fname)
   message("Update dashboard => ", fname)
+  saveRDS(df, fname)
 
   df <- hobo_data
-  fname <- paste0("~clean/therm-data-", min(df$year), "-", max(df$year))
-  write_csv(df, paste0(fname, ".csv.gz"))
-  saveRDS(df, paste0(fname, ".rds"))
-  message("Save thermistor data => ", fname, " (.csv.gz | .rds)")
+
+  lapply(EXPORT_DIRS, function(dir) {
+    fname <- paste0(dir, "/therm-data-", min(df$year), "-", max(df$year))
+    message("Save thermistor data => ", fname, " (.csv.gz | .rds)")
+    write_csv(df, paste0(fname, ".csv.gz"))
+    saveRDS(df, paste0(fname, ".rds"))
+  })
+
   fname <- paste0(DASHBOARD_DIR, "therm-data.rds")
   saveRDS(df, fname)
   message("Update dashboard => ", fname)
-
-  rm(df, fname)
 }
+
+export_therm()
 
 
 
@@ -1091,18 +1138,22 @@ stn_list.sf %>%
 
 all_stns <- stn_list.sf %>% st_set_geometry(NULL)
 
-{
+export_stns <- function() {
   df <- all_stns
-  fname <- "~clean/station-list"
-  write_csv(df, paste0(fname, ".csv"))
-  saveRDS(df, paste0(fname, ".rds"))
-  message("Saved station list => ", fname, " (.csv | .rds)")
+
+  lapply(EXPORT_DIRS, function(dir) {
+    fname <- paste0(dir, "/station-list")
+    message("Saved station list => ", fname, " (.csv | .rds)")
+    write_csv(df, paste0(fname, ".csv"))
+    saveRDS(df, paste0(fname, ".rds"))
+  })
+
   fname <- paste0(DASHBOARD_DIR, "station-list.rds")
-  saveRDS(df, fname)
   message("Update dashboard => ", fname)
-  rm(df, fname)
+  saveRDS(df, fname)
 }
 
+export_stns()
 
 
 
@@ -1150,5 +1201,47 @@ baseline_data %>%
 baseline_final %>%
   group_by(station_id, year) %>%
   tally()
+
+
+
+# compare 2024 nutrient datsets
+wav_nutrient <- read_excel("nutrient/wav_nutrient_RRC_RKeep_20241210.xlsx", na = c("", "NA")) %>%
+  clean_names() %>%
+  filter(year(start_date_time) == 2024) %>%
+  mutate(source = "WAV") %>%
+  rename(
+    station_latitude = calc_ll_lat_dd_amt,
+    station_longitude = calc_ll_long_dd_amt
+  )
+mrk_nutrient <- read_excel("nutrient/MilwaukeeRiverkeeper_TP_2024.xlsx", na = c("", "NA")) %>%
+  clean_names() %>%
+  rename(
+    start_date_time = sample_start_date_time,
+    plan_id = project_no
+  ) %>%
+  mutate(across(start_date_time, ~parse_date_time(.x, "mdyHMSp")))
+
+combined_nutrient <- bind_rows(wav_nutrient, mrk_nutrient) %>%
+  mutate(across(result_value_no, ~gsub("ND", 0, .x) %>% as.numeric())) %>%
+  replace_na(list(result_value_no = 0)) %>%
+  select(source, everything()) %>%
+  arrange(start_date_time, station_id)
+
+combined_nutrient %>%
+  group_by(start_date_time, station_id, result_value_no) %>%
+  filter(n() > 1) %>%
+  mutate(dupe_id = cur_group_id(), .before = 1) %>%
+  write_csv("nutrient dupes.csv", na = "")
+
+combined_nutrient %>%
+  filter(n() == 1, .by = c(start_date_time, station_id, result_value_no)) %>%
+  filter(source == "Milwaukee Riverkeeper") %>%
+  write_csv("nutrient MRK uniques.csv", na = "")
+
+
+
+  arrange(desc(n)) %>%
+  pivot_wider(names_from = "source", values_from = "n") %>% view()
+
 
 
