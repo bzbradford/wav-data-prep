@@ -8,7 +8,6 @@ library(lubridate)
 library(sf)
 library(leaflet)
 library(plotly)
-library(rmapshaper) # ms_simplify
 
 
 DASHBOARD_DIR <- "../WAV Dashboard/data/"
@@ -65,7 +64,7 @@ counties <- read_sf("shp/wi-county-bounds.geojson") %>%
     geometry
   )
 
-counties.simp <- ms_simplify(counties, .25)
+counties.simp <- rmapshaper::ms_simplify(counties, .25)
 
 quickmap(counties)
 quickmap(counties.simp)
@@ -78,7 +77,7 @@ nkes <- read_sf("shp/wi-nke-plans-2022.geojson") %>%
   st_make_valid() %>%
   drop_na(PlanId)
 
-nkes.simp <- ms_simplify(nkes, .25)
+nkes.simp <- rmapshaper::ms_simplify(nkes, .25)
 
 quickmap(nkes)
 quickmap(nkes.simp)
@@ -166,10 +165,10 @@ dnr_watersheds <- read_sf("shp/wi-dnr-watersheds.geojson") %>%
   )
 
 # simplify
-huc8.simp <- ms_simplify(huc8, .5)
-huc10.simp <- ms_simplify(huc10, .5)
-huc12.simp <- ms_simplify(huc12, .5)
-dnr_watersheds.simp <- ms_simplify(dnr_watersheds, .15)
+huc8.simp <- rmapshaper::ms_simplify(huc8, .5)
+huc10.simp <- rmapshaper::ms_simplify(huc10, .5)
+huc12.simp <- rmapshaper::ms_simplify(huc12, .5)
+dnr_watersheds.simp <- rmapshaper::ms_simplify(dnr_watersheds, .15)
 
 # inspect
 quickmap(huc6)
@@ -254,7 +253,7 @@ baseline_obs <- baseline_in %>%
     across(c(air_temp, water_temp, d_o, d_o_percent_saturation, ph, specific_cond, transparency, transparency_tube_length), as.numeric),
     across(c(weather_last_2_days, additional_comments, fieldwork_comments), ~ str_to_sentence(str_squish(.x))),
     weather_conditions = str_to_sentence(gsub("_", " ", weather_conditions)),
-    across(c(fsn, station_id), as.integer),
+    across(c(fsn, station_id, wbic), as.integer),
     across(datetime, ~ parse_date_time(.x, "ymdHMp"))
   ) %>%
   mutate(date = as.Date(datetime), .after = datetime) %>%
@@ -291,7 +290,7 @@ flow_obs <- flow_in %>%
   ) %>%
   mutate(
     across(datetime, ~ parse_date_time(.x, "ymdHMp")),
-    across(c(fsn, station_id), as.integer),
+    across(c(fsn, station_id, wbic), as.integer),
     across(stream_width:corrected_streamflow, as.numeric)
   ) %>%
   mutate(date = as.Date(datetime), .after = datetime) %>%
@@ -404,19 +403,16 @@ tp_data_wav <-
   drop_na(tp) %>%
   mutate(
     tp = gsub("ND", 0, tp),
-    across(c(station_id, tp), as.numeric),
-    across(volunteer_name, str_to_title),
-    date = as.Date(datetime),
-    year = year(date),
-    month = month(date),
-    month_name = month.name[month]
+    across(tp, as.numeric),
   )
+
 
 # MRK 2024 data
 tp_data_mrk <-
-  read_excel("nutrient/MilwaukeeRiverkeeper_TP_2024.xlsx", na = c("", "NA")) %>%
+  read_excel("nutrient/MilwaukeeRiverkeeper_TotalPhosphorusData_2024.xlsx", na = c("", "NA")) %>%
   clean_names() %>%
   select(
+    fsn = fieldwork_seq_no,
     datetime = sample_start_date_time,
     station_id,
     volunteer_name = collector_name,
@@ -425,26 +421,63 @@ tp_data_mrk <-
   drop_na(tp) %>%
   mutate(
     tp = gsub("ND", 0, tp),
+    across(tp, as.numeric),
+    across(datetime, ~parse_date_time(.x, "mdy HMS p"))
+  ) %>%
+  left_join(stn_master_list)
+
+hist(tp_data_mrk$tp)
+
+# East TWA 2024 data & West CMP
+# result units mg/L
+tp_data_twa <-
+  bind_rows(
+    read_excel("nutrient/East_TWA_1_2024.xlsx", na = c("", "NA")),
+    read_excel("nutrient/West_06_CMP25.xlsx", na = c("", "NA"))
+  ) %>%
+  clean_names() %>%
+  filter(sample_dnr_parameter == "665") %>%
+  select(
+    fsn = fieldwork_seqno,
+    datetime = start_date_time,
+    station_id = fieldwork_station_id,
+    volunteer_name = data_collector,
+    tp = result
+  ) %>%
+  drop_na(tp) %>%
+  mutate(
+    tp = gsub("ND", 0, tp),
+    across(c(fsn, station_id, tp), as.numeric),
+    across(datetime, ~parse_date_time(.x, "mdy HMS p"))
+  ) %>%
+  left_join(stn_master_list)
+
+hist(tp_data_twa$tp)
+tp_data_twa %>% distinct(station_id)
+
+# merge and strip dupes
+tp_data <-
+  bind_rows(
+    tp_data_wav,
+    tp_data_mrk,
+    tp_data_twa
+  ) %>%
+  mutate(
+    tp = gsub("ND", 0, tp),
     across(c(station_id, tp), as.numeric),
     across(volunteer_name, str_to_title),
-    datetime = parse_date_time(datetime, "mdyHMSp"),
     date = as.Date(datetime),
     year = year(date),
     month = month(date),
     month_name = month.name[month]
   ) %>%
-  left_join(stn_master_list)
-
-# merge and strip dupes
-tp_data <- bind_rows(
-  tp_data_wav,
-  tp_data_mrk %>% select(any_of(names(tp_data_wav)))
-) %>%
   distinct(station_id, datetime, tp, .keep_all = TRUE) %>%
   mutate(
     num_obs = sum(!is.na(tp)),
     .by = c(year, station_id)
-  )
+  ) %>%
+  filter(year < 2025) # TEMP
+
 
 ## Data check ----
 # tp_data %>% slice_max(tp, n = 5)
@@ -452,6 +485,15 @@ tp_data <- bind_rows(
 
 tp_data %>% slice_max(tp, n = 5)
 ggplot(tp_data) + geom_histogram(aes(x = tp)) + scale_x_sqrt()
+tp_data %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  ggplot() +
+  geom_sf(data = counties, fill = "grey", lwd = .25) +
+  geom_sf(aes(fill = log1p(tp * 1000 + 1)), shape = 24, size = 3) +
+  scale_fill_distiller(palette = "Spectral") +
+  facet_wrap(~year) +
+  theme(legend.position = "inside", legend.position.inside = c(.85, .15))
+
 
 tp_final <- tp_data %>%
   select(-datetime) %>%
